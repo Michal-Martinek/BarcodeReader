@@ -58,13 +58,14 @@ def toImg(arr: np.ndarray) -> ColorImage:
 	if arr.dtype in (np.bool, np.float32, np.float64): arr = (arr * 255)
 	if len(arr.shape) == 2 or arr.shape[-1] != 3: arr = np.repeat(arr[..., np.newaxis], 3, axis=-1)
 	return arr.astype('uint8')
-def paddToShape(img: np.ndarray, shape) -> np.ndarray:
-	'''padds img to shape by repeating pixels at the edges'''
-	pixelsToPadd = np.array((*shape, 3)) - img.shape
-	countsToPadd = np.array((pixelsToPadd // 2, pixelsToPadd - pixelsToPadd // 2)).T
-	img = np.pad(img, countsToPadd, mode='edge')
-	return img
 
+def differsByAtmost(*args, maxDiff=2):
+	# TODO raise err
+	# TODO what about gradual change: 1, 3, 5, 7
+	res = np.ones_like(args[0], dtype='bool')
+	for a, b in zip(args[:-1], args[1:]):
+		res = np.logical_and(res, np.abs(a - b) <= maxDiff)
+	return res
 def genColorsHUE(N):
 	'''generates N colors distinct in hue'''
 	hues = np.linspace(0, 179, N, endpoint=False, dtype=np.uint8)
@@ -78,7 +79,43 @@ def check(cond, msg):
 def raiseOnNone(arr):
 	if arr is None or arr.size == 0:
 		raise DetectionError # TODO (msg)
-# TODO -----------------
+	
+# preprocessing ----------------------------------------------
+def paddToShape(img: np.ndarray, shape) -> np.ndarray:
+	'''padds img to shape by repeating pixels at the edges'''
+	pixelsToPadd = np.array((*shape, 3)) - img.shape
+	countsToPadd = np.array((pixelsToPadd // 2, pixelsToPadd - pixelsToPadd // 2)).T
+	img = np.pad(img, countsToPadd, mode='edge')
+	return img
+def averageChunks(lightness: np.ndarray, NUM_CHUNKS, CHUNK_SIZE):
+	'''averages lightness inside each chunk'''
+	chunks = np.reshape(lightness, (NUM_CHUNKS[0], CHUNK_SIZE[0], NUM_CHUNKS[1], CHUNK_SIZE[1]))
+	sums = chunks.sum(axis=(1,3))
+	avgs = sums / (CHUNK_SIZE[0] * CHUNK_SIZE[1])
+	assert avgs.shape == NUM_CHUNKS
+	return avgs
+def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -> Lightness:
+	avgs = averageChunks(images.lightness, NUM_CHUNKS, CHUNK_SIZE)
+	localAverages = np.repeat(avgs, CHUNK_SIZE[0], axis=0)
+	kernelSize = np.floor_divide(CHUNK_SIZE, blurSizeRatio).astype('int')
+	localAverages = np.repeat(localAverages, CHUNK_SIZE[1], axis=1)
+	if blurSizeRatio: localAverages = cv2.blur(localAverages, kernelSize)
+	images.localAverages = localAverages
+	averages = (localAverages + np.average(images.lightness)) / 2
+	return averages
+
+def prepareImg(img: ColorImage) -> Images:
+	'''TODO'''
+	# TODO resizing
+	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_CHUNKS).astype('int')
+	# print('CHUNK_SIZE', CHUNK_SIZE) # TODO logging, save?
+	images = Images(inputImg=paddToShape(img, NUM_CHUNKS * CHUNK_SIZE))
+	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
+
+	avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
+	images.BaW = images.lightness > avgLightness
+	return images
+# scanlines ------------------------------
 def genDrawLines(starts, ends, background):
 	linePs = []
 	maxLen = 0
@@ -120,31 +157,6 @@ def getScanLines(images: Images) -> LineReads:
 		for lineIdx, points in enumerate(grad):
 			images.lineReads[g, lineIdx, np.arange(len(points))] = images.BaW[*points.T]
 	return images.lineReads
-
-def averageChunks(lightness: np.ndarray, NUM_CHUNKS, CHUNK_SIZE):
-	'''averages lightness inside each chunk'''
-	chunks = np.reshape(lightness, (NUM_CHUNKS[0], CHUNK_SIZE[0], NUM_CHUNKS[1], CHUNK_SIZE[1]))
-	sums = chunks.sum(axis=(1,3))
-	avgs = sums / (CHUNK_SIZE[0] * CHUNK_SIZE[1])
-	assert avgs.shape == NUM_CHUNKS
-	return avgs
-def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -> Lightness:
-	avgs = averageChunks(images.lightness, NUM_CHUNKS, CHUNK_SIZE)
-	localAverages = np.repeat(avgs, CHUNK_SIZE[0], axis=0)
-	localAverages = np.repeat(localAverages, CHUNK_SIZE[1], axis=1)
-	kernelSize = np.floor_divide(CHUNK_SIZE, blurSizeRatio).astype('int')
-	if blurSizeRatio: localAverages = cv2.blur(localAverages, kernelSize)
-	images.localAverages = localAverages
-	averages = (localAverages + np.average(images.lightness)) / 2
-	return averages
-
-def differsByAtmost(*args, maxDiff=2):
-	# TODO raise err
-	# TODO what about gradual change: 1, 3, 5, 7
-	res = np.ones_like(args[0], dtype='bool')
-	for a, b in zip(args[:-1], args[1:]):
-		res = np.logical_and(res, np.abs(a - b) <= maxDiff)
-	return res
 
 def splitToBars(lineReads: Line) -> Bars:
 	'''ignores first bar if it's black'''
@@ -207,7 +219,6 @@ def findSpans(gradIdx: int, lineIdx: int, lineReads: np.ndarray[Line]) -> tuple[
 	spans = filterOnLen(bars, spans)
 	raiseOnNone(spans)
 	return bars, spans
-
 def splitOnTags(span: Spans, bars: Bars) -> Groups:
 	'''checks the middle and end tags
 	* splits bars into digit groups (l/r half, bars)'''
@@ -218,15 +229,13 @@ def splitOnTags(span: Spans, bars: Bars) -> Groups:
 	check(differsByAtmost(span['moduleWidth'], *centerEdges['len']), 'incorrect tag width')
 	digits = np.array((bars[span['start']:center], bars[center + 5:span['end'] - 3]))
 	return digits
-
-
 def toBarWidths(span: Spans, digitGroups: Groups) -> Widths:
 	assert digitGroups.size == 2 * 6 * 4
 	barWidths = digitGroups['len'].reshape((2, 6, 4))
 	barWidths = np.round(barWidths / span['moduleWidth']).astype('int')
 	check(np.all(barWidths.sum(-1) == 7), 'barWidths don\'t sum up to 7')
 	return barWidths
-
+# decoding ---------------------------------------
 # NOTE here white corresponds to 0 and black = 1
 # as on wikipedia "https://en.wikipedia.org/wiki/International_Article_Number"
 DIGIT_ENCODINGS = {
@@ -305,24 +314,6 @@ def decodeDigits(widths: Widths) -> Digits:
 		encoding = 'R' if i >= 6 else 'L' if leftParities[i] else 'G'
 		digits[i+1] = accessEncodingDict(DIGIT_ENCODINGS[encoding], bars, blackFirst=encoding == 'R')
 	return digits
-
-def checksumDigit(digits: Digits) -> bool:
-	checksum = digits.sum() + 2 * digits[1:-1:2].sum()
-	return checksum % 10 == 0
-
-def prepareImg(img: ColorImage) -> Images:
-	'''TODO'''
-	# TODO resizing
-	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_CHUNKS).astype('int')
-	# print('CHUNK_SIZE', CHUNK_SIZE) # TODO logging, save?
-	images = Images(inputImg=paddToShape(img, NUM_CHUNKS * CHUNK_SIZE))
-
-	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
-
-	avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
-	images.BaW = images.lightness > avgLightness
-	return images
-
 def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> Digits:
 	'''fully processes detection on single line'''
 	bars, spans = findSpans(gradIdx, lineIdx, lineReads)
@@ -335,6 +326,9 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> Digits
 		detections.append(detected)
 	return detections
 
+def checksumDigit(digits: Digits) -> bool:
+	checksum = digits.sum() + 2 * digits[1:-1:2].sum()
+	return checksum % 10 == 0
 def detectImage(images: Images) -> Digits:
 	lineReads = getScanLines(images)
 	detections = []
@@ -346,6 +340,7 @@ def detectImage(images: Images) -> Digits:
 			except DetectionError: continue
 	detections = np.unique(np.array(detections), axis=0)
 	return detections
+# drawing ----------------------------------------------------
 def drawGradLineReads(lineReadImgs: list[ColorImage]):
 	'''draws all line reads grouped by gradient with debug info'''
 	for gradIdx, lineReads in enumerate(lineReadImgs):
@@ -356,8 +351,8 @@ def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
 	off = quietzoneEdge['start'] + (quietzoneEdge['len'] // 4) * fourths
 	lineSlice[off : off + basewidth] = color
 def drawDebugs(images: Images):
-	# cv2.imshow('lightness', toImg(images.lightness))
-	# cv2.imshow('localAverages', toImg(images.localAverages))
+	cv2.imshow('lightness', toImg(images.lightness))
+	cv2.imshow('localAverages', toImg(images.localAverages))
 	cv2.imshow('BaW', toImg(images.BaW))
 	cv2.imshow('linesImg', images.linesImg)
 
@@ -370,7 +365,7 @@ def drawDebugs(images: Images):
 	# 	colorcodeQuietzone(lineSlice, span['moduleWidth'], endEdge, (0, 255, 0))
 	drawGradLineReads(lineReadImgs)
 
-
+# IO --------------------------------------------------
 def processImg(img: ColorImage) -> Images:
 	images = prepareImg(img)
 	digits = detectImage(images)
