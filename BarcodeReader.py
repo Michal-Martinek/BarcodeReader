@@ -297,9 +297,11 @@ def detectImage(images: Images) -> Digits:
 	detections = np.unique(np.array(detections), axis=0)
 	return detections
 # drawing ----------------------------------------------------
-def drawGradLineReads(lineReadImgs: list[ColorImage]):
+def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
 	'''draws all line reads grouped by gradient with debug info'''
 	for gradIdx, lineReads in enumerate(lineReadImgs):
+		if onlyInteresting and np.unique(lineReads.reshape((-1, 3)), axis=0).shape == (2, 3):
+			continue # don't show grads without spans
 		linImg = np.repeat(lineReads, SCANLINE_DIST // 2, axis=0)
 		cv2.imshow(f'Grad {gradIdx} - lines', linImg)
 def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
@@ -315,15 +317,16 @@ def drawSpans(img: ColorImage, images: Images):
 				colorcodeQuietzone(lineSlice, span['moduleWidth'], startEdge)
 				endEdge = bars[span['end']]
 				colorcodeQuietzone(lineSlice, span['moduleWidth'], endEdge, (0, 255, 0))
-def drawDebugs(images: Images):
-	cv2.imshow('lightness', toImg(images.lightness))
-	cv2.imshow('localAverages', toImg(images.localAverages))
-	cv2.imshow('BaW', toImg(images.BaW))
+def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, grads:int=1):
+	if lightness: cv2.imshow('lightness', toImg(images.lightness))
+	if localAverages: cv2.imshow('localAverages', toImg(images.localAverages))
+	if BaW: cv2.imshow('BaW', toImg(images.BaW))
 	cv2.imshow('linesImg', images.linesImg)
 
-	lineReadImgs = toImg(images.lineReads)
-	drawSpans(lineReadImgs, images)
-	drawGradLineReads(lineReadImgs)
+	if grads:
+		lineReadImgs = toImg(images.lineReads)
+		drawSpans(lineReadImgs, images)
+		drawGradLineReads(lineReadImgs, grads == 1)
 
 # IO --------------------------------------------------
 def processImg(img: ColorImage) -> Images:
