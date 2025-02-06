@@ -11,7 +11,7 @@ NUM_CHUNKS = (6, 6) # TODO rename
 
 SCANLINE_DIST = 40
 NUM_GRADIENTS = 2 + 3 # TODO count, rename
-MIN_QUIETZONE_WIDTH = 8
+MIN_QUIETZONE_WIDTH = 5
 NUM_BASEWIDTHS = 95 - 3
 NUM_EDGES = 4 * 12 + 5 + 3
 
@@ -48,10 +48,11 @@ class Images:
 	lineReads: LineReads = None
 	linesImg: ColorImage = None
 
-	bars: Bars = None
-	spans: Spans = None
-	def addLine(self, bars: Bars, spans: Spans):
-		return
+	lines: list[list[tuple[Bars, Spans]]] = None
+	def initLines(self):
+		self.lines = [[]] * NUM_GRADIENTS
+	def addLine(self, gradIdx: int, bars: Bars, spans: Spans):
+		self.lines[gradIdx].append((bars, spans))
 # helpers --------------------------------------
 def toImg(arr: np.ndarray) -> ColorImage:
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -88,6 +89,8 @@ def averageChunks(lightness: np.ndarray, NUM_CHUNKS, CHUNK_SIZE):
 	avgs = sums / (CHUNK_SIZE[0] * CHUNK_SIZE[1])
 	assert avgs.shape == NUM_CHUNKS
 	return avgs
+def mix(ratio, a, b):
+	return a * (1 - ratio) + b * ratio
 def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -> Lightness:
 	avgs = averageChunks(images.lightness, NUM_CHUNKS, CHUNK_SIZE)
 	localAverages = np.repeat(avgs, CHUNK_SIZE[0], axis=0)
@@ -95,7 +98,7 @@ def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -
 	localAverages = np.repeat(localAverages, CHUNK_SIZE[1], axis=1)
 	if blurSizeRatio: localAverages = cv2.blur(localAverages, kernelSize)
 	images.localAverages = localAverages
-	averages = (localAverages + np.average(images.lightness)) / 2
+	averages = mix(0.5, localAverages, np.average(images.lightness))
 	return averages
 
 def prepareImg(img: ColorImage) -> Images:
@@ -104,13 +107,15 @@ def prepareImg(img: ColorImage) -> Images:
 	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_CHUNKS).astype('int')
 	# print('CHUNK_SIZE', CHUNK_SIZE) # TODO logging, save?
 	images = Images(inputImg=paddToShape(img, NUM_CHUNKS * CHUNK_SIZE))
+	images.initLines()
 	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
 
 	avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
 	images.BaW = images.lightness > avgLightness
 	return images
 # scanlines ------------------------------
-def genDrawLines(starts, ends, background):
+def genDrawLines(starts, ends, images: Images):
+	images.linesImg = toImg(images.lightness)
 	linePs = []
 	maxLen = 0
 	for color, parallelEndpoints in zip(genColorsHUE(starts.shape[0]), zip(starts, ends)):
@@ -120,7 +125,7 @@ def genDrawLines(starts, ends, background):
 			line = np.array(skimage.draw.line(*start, *end)).T
 			linePs[-1].append(line)
 			maxLen = max(maxLen, len(line))
-			cv2.line(background, start[::-1], end[::-1], color)
+			cv2.line(images.linesImg, start[::-1], end[::-1], color)
 	return linePs, maxLen
 
 def getScanlineEndpoints(shape: tuple) -> tuple:
@@ -143,8 +148,7 @@ def getScanlineEndpoints(shape: tuple) -> tuple:
 	return startPoints, endPoints.astype('int')
 def getScanLines(images: Images) -> LineReads:
 	startPoints, endPoints = getScanlineEndpoints(images.BaW.shape)
-	images.linesImg = toImg(images.lightness)
-	linePs, maxLen = genDrawLines(startPoints, endPoints, background=images.linesImg)
+	linePs, maxLen = genDrawLines(startPoints, endPoints, images)
 
 	images.lineReads = np.zeros((len(linePs), len(linePs[0]), maxLen), dtype='bool')
 	for g, grad in enumerate(linePs):
@@ -268,7 +272,7 @@ def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
 def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> list[Digits]:
 	'''fully processes detection on single line'''
 	bars, spans = findSpans(gradIdx, lineIdx, lineReads)
-	images.addLine(bars, spans)
+	images.addLine(gradIdx, bars, spans)
 	detections = []
 	for span in spans:
 		digitGroups = splitOnTags(span, bars)
@@ -302,6 +306,15 @@ def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
 	fourths = 2 * (color[2] != 0) + 1
 	off = quietzoneEdge['start'] + (quietzoneEdge['len'] // 4) * fourths
 	lineSlice[off : off + basewidth] = color
+def drawSpans(img: ColorImage, images: Images):
+	for grad in images.lines:
+		for bars, spans in grad:
+			for span in spans:
+				lineSlice = img[span['gradIdx'], span['lineIdx']]
+				startEdge = bars[span['start'] - 4]
+				colorcodeQuietzone(lineSlice, span['moduleWidth'], startEdge)
+				endEdge = bars[span['end']]
+				colorcodeQuietzone(lineSlice, span['moduleWidth'], endEdge, (0, 255, 0))
 def drawDebugs(images: Images):
 	cv2.imshow('lightness', toImg(images.lightness))
 	cv2.imshow('localAverages', toImg(images.localAverages))
@@ -309,12 +322,7 @@ def drawDebugs(images: Images):
 	cv2.imshow('linesImg', images.linesImg)
 
 	lineReadImgs = toImg(images.lineReads)
-	# for span in images.spans:
-	# 	lineSlice = lineReadImgs[span['gradIdx'], span['lineIdx']]
-	# 	startEdge = images.bars[span['start'] - 4]
-	# 	colorcodeQuietzone(lineSlice, span['moduleWidth'], startEdge)
-	# 	endEdge = images.bars[span['end']]
-	# 	colorcodeQuietzone(lineSlice, span['moduleWidth'], endEdge, (0, 255, 0))
+	drawSpans(lineReadImgs, images)
 	drawGradLineReads(lineReadImgs)
 
 # IO --------------------------------------------------
