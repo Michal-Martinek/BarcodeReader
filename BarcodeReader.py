@@ -59,13 +59,10 @@ def toImg(arr: np.ndarray) -> ColorImage:
 	if len(arr.shape) == 2 or arr.shape[-1] != 3: arr = np.repeat(arr[..., np.newaxis], 3, axis=-1)
 	return arr.astype('uint8')
 
-def differsByAtmost(*args, maxDiff=2):
-	# TODO raise err
-	# TODO what about gradual change: 1, 3, 5, 7
-	res = np.ones_like(args[0], dtype='bool')
-	for a, b in zip(args[:-1], args[1:]):
-		res = np.logical_and(res, np.abs(a - b) <= maxDiff)
-	return res
+def differsByAtmost(target, args: npt.NDArray, maxDiff=2) -> bool:
+	'''if all args differ from target by at most maxDiff'''
+	target = target[..., np.newaxis]
+	return np.all(np.abs(args - target) <= maxDiff, axis=-1)
 def genColorsHUE(N):
 	'''generates N colors distinct in hue'''
 	hues = np.linspace(0, 179, N, endpoint=False, dtype=np.uint8)
@@ -76,9 +73,6 @@ def genColorsHUE(N):
 def check(cond, msg):
 	if cond: return
 	raise DetectionError(msg)
-def raiseOnNone(arr):
-	if arr is None or arr.size == 0:
-		raise DetectionError # TODO (msg)
 	
 # preprocessing ----------------------------------------------
 def paddToShape(img: np.ndarray, shape) -> np.ndarray:
@@ -172,38 +166,35 @@ def splitToBars(lineReads: Line) -> Bars:
 	bars['idx'] = np.arange(len(barStarts) + 1)
 	return bars
 
-def findCodeStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
+def findSpanStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
 	quietZoneIdxs = np.where(bars[:-5:2]['len'] >= MIN_QUIETZONE_WIDTH)[0] * 2
+	check(quietZoneIdxs.size, 'no quietzones found')
 	possibleStartPattern = bars[quietZoneIdxs[:, np.newaxis] + np.arange(4)]
-	goodWidths = differsByAtmost(*possibleStartPattern['len'].T[1:], maxDiff=2)
-	# the three stripes in start tag are the same width
-	raiseOnNone(possibleStartPattern := possibleStartPattern[goodWidths])
+	# TODO floating?
 	moduleWidths = np.average(possibleStartPattern['len'][:, 1:], axis=1).astype('int64')
-	isQuietThickEnough = possibleStartPattern['len'][:, 0] >= moduleWidths * MIN_QUIETZONE_WIDTH
-	raiseOnNone(possibleStartPattern := possibleStartPattern[isQuietThickEnough])
+	# NOTE are bars in start tag same width?
+	good = differsByAtmost(moduleWidths, possibleStartPattern['len'][:, 1:])
+	check(good.any(), 'no start tags found')
+	# NOTE is quietzone thick enough?
+	good &= possibleStartPattern['len'][:, 0] >= moduleWidths * MIN_QUIETZONE_WIDTH
+	check(good.any(), 'starting quietzones are too narrow')
 
-	spans = np.zeros((possibleStartPattern.shape[0]), SPANS_DTYPE)
-	spans['start'] = possibleStartPattern['idx'][:, -1] + 1
-	spans['moduleWidth'] = moduleWidths[isQuietThickEnough]
+	startPatterns = possibleStartPattern[good]
+	spans = np.zeros((startPatterns.shape[0]), SPANS_DTYPE)
+	spans['start'] = startPatterns['idx'][:, -1] + 1
+	spans['moduleWidth'] = moduleWidths[good]
 	spans[['gradIdx', 'lineIdx']] = (gradIdx, lineIdx)
 	return spans
 
-
-def findClosingQuietzone(bars: Bars, spans: Spans) -> Spans:
-	for span in spans:
-		whiteAfter = bars[span['start'] + 2::2]
-		isQuietzone = whiteAfter['len'] >= MIN_QUIETZONE_WIDTH * span['moduleWidth']
-		if not np.any(isQuietzone): continue
-		span['end'] = whiteAfter[isQuietzone][0]['idx']
-	quietFound = spans['end'].astype('bool')
-	check(quietFound.any(), 'quietzone not found for any span')
-	return spans[quietFound]
-def filterOnLen(bars: Bars, spans: Spans):
-	good = np.ones_like(spans, dtype='bool')
+def findSpanEnds(bars: Bars, spans: Spans) -> Spans:
+	spans['end'] = spans['start'] + NUM_EDGES
+	fits = spans['end'] < bars.shape
+	check(fits.any(), 'not enough bars after quietzone')
+	return spans[fits]
+def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
-	good &= differsByAtmost(lens / spans['moduleWidth'], NUM_BASEWIDTHS, maxDiff=2)
-	edgeCounts = bars[spans['end']]['idx'] - bars[spans['start']]['idx']
-	good &= edgeCounts == NUM_EDGES
+	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens, maxDiff=NUM_BASEWIDTHS)
+	check(good.any(), 'incorrect code len')
 	return spans[good]
 
 # TODO use grad, lineidx
@@ -213,116 +204,75 @@ def findSpans(gradIdx: int, lineIdx: int, lineReads: np.ndarray[Line]) -> tuple[
 	* they start after start tag, end before quietzone)
 	'''
 	bars = splitToBars(lineReads)
-	check(len(bars) > 10, 'too little bars on scanline')
-	spans = findCodeStarts(bars, gradIdx, lineIdx)
-	spans = findClosingQuietzone(bars, spans)
-	spans = filterOnLen(bars, spans)
-	raiseOnNone(spans)
+	check(bars.size >= NUM_EDGES, 'not enough bars on scanline')
+	spans = findSpanStarts(bars, gradIdx, lineIdx)
+	spans = findSpanEnds(bars, spans)
+	spans = checkCodeLen(bars, spans)
 	return bars, spans
 def splitOnTags(span: Spans, bars: Bars) -> Groups:
 	'''checks the middle and end tags
 	* splits bars into digit groups (l/r half, bars)'''
 	endTag = bars[span['end'] - 3:span['end']]
-	check(differsByAtmost(span['moduleWidth'], *endTag['len']), 'incorrect tag width')
+	check(differsByAtmost(span['moduleWidth'], endTag['len']), 'incorrect end tag width')
 	center = span['start'] + 6 * 4
 	centerEdges = bars[center:center + 5]
-	check(differsByAtmost(span['moduleWidth'], *centerEdges['len']), 'incorrect tag width')
+	check(differsByAtmost(span['moduleWidth'], centerEdges['len']), 'incorrect center tag width')
 	digits = np.array((bars[span['start']:center], bars[center + 5:span['end'] - 3]))
 	return digits
-def toBarWidths(span: Spans, digitGroups: Groups) -> Widths:
-	assert digitGroups.size == 2 * 6 * 4
-	barWidths = digitGroups['len'].reshape((2, 6, 4))
-	barWidths = np.round(barWidths / span['moduleWidth']).astype('int')
-	check(np.all(barWidths.sum(-1) == 7), 'barWidths don\'t sum up to 7')
-	return barWidths
 # decoding ---------------------------------------
-# NOTE here white corresponds to 0 and black = 1
-# as on wikipedia "https://en.wikipedia.org/wiki/International_Article_Number"
-DIGIT_ENCODINGS = {
-	'L': {
-		'0001101': 0,
-		'0011001': 1,
-		'0010011': 2,
-		'0111101': 3,
-		'0100011': 4,
-		'0110001': 5,
-		'0101111': 6,
-		'0111011': 7,
-		'0110111': 8,
-		'0001011': 9,
-	},
-	'G': {
-		'0100111': 0,
-		'0110011': 1,
-		'0011011': 2,
-		'0100001': 3,
-		'0011101': 4,
-		'0111001': 5,
-		'0000101': 6,
-		'0010001': 7,
-		'0001001': 8,
-		'0010111': 9,
-	},
-	'R': {
-		'1110010': 0,
-		'1100110': 1,
-		'1101100': 2,
-		'1000010': 3,
-		'1011100': 4,
-		'1001110': 5,
-		'1010000': 6,
-		'1000100': 7,
-		'1001000': 8,
-		'1110100': 9,
-	}
-}
+
+# NOTE lens of bars in R-code
+# L-code is the same - colors are flipped but this has no color information
+# G-code has reverse order
+DIGIT_ENCODINGS = np.array((
+	(3, 2, 1, 1),
+	(2, 2, 2, 1),
+	(2, 1, 2, 2),
+	(1, 4, 1, 1),
+	(1, 1, 3, 2),
+	(1, 2, 3, 1),
+	(1, 1, 1, 4),
+	(1, 3, 1, 2),
+	(1, 2, 1, 3),
+	(3, 1, 1, 2),
+))
 FIRST_DIGIT_ENCODING = {
-	'111111': 0,
-	'110100': 1,
-	'110010': 2,
-	'110001': 3,
-	'101100': 4,
-	'100110': 5,
-	'100011': 6,
-	'101010': 7,
-	'101001': 8,
-	'100101': 9,
+	(1, 1, 1, 1, 1, 1): 0,
+	(1, 1, 0, 1, 0, 0): 1,
+	(1, 1, 0, 0, 1, 0): 2,
+	(1, 1, 0, 0, 0, 1): 3,
+	(1, 0, 1, 1, 0, 0): 4,
+	(1, 0, 0, 1, 1, 0): 5,
+	(1, 0, 0, 0, 1, 1): 6,
+	(1, 0, 1, 0, 1, 0): 7,
+	(1, 0, 1, 0, 0, 1): 8,
+	(1, 0, 0, 1, 0, 1): 9,
 }
-def accessEncodingDict(d: dict, key: np.ndarray, blackFirst: bool):
-	assert key.shape == (4,) and key.dtype == np.int64
-	cvt = lambda idxCommaWidth: idxCommaWidth[1] * ('1' if (idxCommaWidth[0] + blackFirst) % 2 else '0')
-	s = ''.join(map(cvt, enumerate(key)))
-	if s not in d:
-		assert False, 'digit code not found'
-	return d[s]
-def getLeftParities(widths):
-	'''computes digit parities, returns parities for the left side
-	* turns around the read direction if necessary'''
-	blackBars = np.stack((widths[0, :, 1::2], widths[1, :, 0::2]), axis=0)
-	parities = np.sum(blackBars, -1) % 2
-	leftParities = parities[0]
-	if np.all(parities[0] == 0):
-		widths = widths[::-1, ::-1, ::-1]
-		leftParities = parities[1]
-	return leftParities, widths
-def decodeDigits(widths: Widths) -> Digits:
-	leftParities, widths = getLeftParities(widths)
-	firstDigitEnc = ''.join(map(str, leftParities))
-	digits = np.zeros(13, 'int')
-	digits[0] = FIRST_DIGIT_ENCODING.get(firstDigitEnc, 0)
-	for i, bars in enumerate(widths.reshape(-1, 4)):
-		encoding = 'R' if i >= 6 else 'L' if leftParities[i] else 'G'
-		digits[i+1] = accessEncodingDict(DIGIT_ENCODINGS[encoding], bars, blackFirst=encoding == 'R')
+def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
+	'''finds the closest digit encoding for given span (minimum squared distance)'''
+	lens = digitGroups['len'].reshape((2, 6, 4))
+	encodings = DIGIT_ENCODINGS * span['moduleWidth']
+	encodings = np.concat((encodings, encodings[..., ::-1]))
+	distances = np.sum((lens[..., np.newaxis, :] - encodings) ** 2, axis=-1)
+
+	digits = np.argmin(distances, axis=-1)
+	parity = (digits // 10 + ((1,), (0,))) % 2
+	digits = digits.flatten() % 10
+	if parity[0, 0] == 0 and not _flipped: # NOTE read backwards
+		return decodeDigits(span, digitGroups[::-1, ::-1], _flipped=True)
+	check(np.all(parity[1] == 0), 'R-encoding expected in right half')
+	
+	firstDigit = FIRST_DIGIT_ENCODING.get(tuple(parity[0]), 0)
+	digits = np.concat(((firstDigit,), digits), axis=0)
 	return digits
-def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> Digits:
+def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> list[Digits]:
 	'''fully processes detection on single line'''
 	bars, spans = findSpans(gradIdx, lineIdx, lineReads)
 	images.addLine(bars, spans)
 	detections = []
 	for span in spans:
 		digitGroups = splitOnTags(span, bars)
-		widths = toBarWidths(span, digitGroups)
-		detected = decodeDigits(widths)
+		detected = decodeDigits(span, digitGroups)
 		detections.append(detected)
 	return detections
 
@@ -336,8 +286,10 @@ def detectImage(images: Images) -> Digits:
 		for lineIdx, points in enumerate(parallels):
 			try:
 				digits = detectLine(gradIdx, lineIdx, images, points)
+				print(f'{gradIdx}:{lineIdx:<2}', digits)
 				[detections.append(d) for d in digits if checksumDigit(d)]
-			except DetectionError: continue
+			except DetectionError as e:
+				print(f'{gradIdx}:{lineIdx:<2} ERROR:', e)
 	detections = np.unique(np.array(detections), axis=0)
 	return detections
 # drawing ----------------------------------------------------
@@ -369,7 +321,7 @@ def drawDebugs(images: Images):
 def processImg(img: ColorImage) -> Images:
 	images = prepareImg(img)
 	digits = detectImage(images)
-	print(digits)
+	if digits.size: print('detected:', digits)
 	drawDebugs(images)
 	return images
 	# TODO choose final read
