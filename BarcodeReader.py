@@ -301,10 +301,14 @@ def detectImage(images: Images) -> Digits:
 def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
 	'''draws all line reads grouped by gradient with debug info'''
 	for gradIdx, lineReads in enumerate(lineReadImgs):
+		winname = f'Grad {gradIdx} - lines'
+		# NOTE don't show (close) grads without spans
 		if onlyInteresting and np.unique(lineReads.reshape((-1, 3)), axis=0).shape == (2, 3):
-			continue # don't show grads without spans
+			if cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
+				cv2.destroyWindow(winname)
+			continue
 		linImg = np.repeat(lineReads, SCANLINE_DIST // 2, axis=0)
-		cv2.imshow(f'Grad {gradIdx} - lines', linImg)
+		cv2.imshow(winname, linImg)
 def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
 	fourths = 2 * (color[2] != 0) + 1
 	off = quietzoneEdge['start'] + (quietzoneEdge['len'] // 4) * fourths
@@ -369,12 +373,13 @@ def cameraLoop(winname='Barcode reader - camera input'):
 	img = showSavedCamInput(winname)
 	camera = cv2.VideoCapture(0)
 	while cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
-		cv2.imshow('input', img)
 		images = processImg(img)
-
+		if start := 'start' not in vars(): # NOTE wait for input to start capture
+			if not showLoop(winname, camera=None):
+				break
 		ret = showLoop(winname, camera)
 		if not ret: break
-		img = ret[1]
+		cv2.imshow('input', img := ret[1])
 	camera.release()
 
 def testDataset(winname='input'):
