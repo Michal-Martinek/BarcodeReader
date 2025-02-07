@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.typing as npt
+from typing import Optional
 import cv2
 import os
 import math
@@ -337,20 +338,57 @@ def processImg(img: ColorImage) -> Images:
 	return images
 	# TODO choose final read
 
-def getInputImg() -> np.ndarray:
-	img = cv2.imread('barcodes\\barcode-crop.png')
-	SHRINK_FACTOR = 2
-	img = img[::SHRINK_FACTOR, ::SHRINK_FACTOR]
-	return img.copy()
+def showCameraInput(camera: cv2.VideoCapture, winname: str) -> ColorImage:
+	ret, img = camera.read()
+	if not ret:
+		raise RuntimeError('no camera input')
+	cv2.imshow(winname, img)
+	return img
+def showLoop(winname='input', camera: Optional[cv2.VideoCapture]=None, *, delay=10) -> bool:
+	'''waits in loop after showing the results
+	* returns whether to continue'''
+	while cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
+		if camera:
+			img = showCameraInput(camera, winname)
+		if (key := cv2.waitKey(delay)) != -1:
+			if key in [ord('q'), 27]:
+				return False
+			elif key == 32:
+				if camera:
+					cv2.imwrite('camera-input.png', img)
+					return (True, img)
+				return True
+def showSavedCamInput(winname: str, path='camera-input.png') -> ColorImage:
+	img = np.zeros((200, 200, 3), 'uint8') # default
+	if os.path.exists(path):
+		img = cv2.imread(path)
+	cv2.imshow(winname, img)
+	print('camera image shape', img.shape)
+	return img
+def cameraLoop(winname='Barcode reader - camera input'):
+	img = showSavedCamInput(winname)
+	camera = cv2.VideoCapture(0)
+	while cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
+		cv2.imshow('input', img)
+		images = processImg(img)
 
+		ret = showLoop(winname, camera)
+		if not ret: break
+		img = ret[1]
+	camera.release()
+
+def testDataset(winname='input'):
+	os.chdir('barcode-dataset')
+	for file in os.listdir():
+		img = cv2.imread(file)
+		cv2.imshow(winname, img)
+
+		processImg(img)
+		if not showLoop(winname): break
+	
 def main():
-	img = getInputImg()
-	cv2.imshow('Barcode reader - input img', img)
-	images = processImg(img)
-
-	while cv2.getWindowProperty('Barcode reader - input img', cv2.WND_PROP_VISIBLE) >= 1:
-		if cv2.waitKey(50) == ord('q'):
-			break
+	# testDataset()
+	cameraLoop()
 
 	cv2.destroyAllWindows()
 
