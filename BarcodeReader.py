@@ -31,7 +31,7 @@ Line = npt.NDArray[np.bool]
 BAR_DTYPE = [('start', np.int64), ('len', np.int64), ('idx', np.int64)]
 Bars = npt.NDArray # TODO
 # TODO not class?
-SPANS_DTYPE = [('start', np.int64), ('moduleWidth', np.int64), ('end', np.int64), ('gradIdx', np.int64), ('lineIdx', np.int64)]
+SPANS_DTYPE = [('start', np.int64), ('moduleWidth', np.float16), ('end', np.int64), ('gradIdx', np.int64), ('lineIdx', np.int64)]
 Spans = npt.NDArray
 Groups = npt.NDArray
 Widths = npt.NDArray
@@ -63,7 +63,7 @@ def toImg(arr: np.ndarray) -> ColorImage:
 
 def differsByAtmost(target, args: npt.NDArray, maxDiff=2) -> bool:
 	'''if all args differ from target by at most maxDiff'''
-	target = target[..., np.newaxis]
+	if target.ndim < args.ndim: target = target[..., np.newaxis]
 	return np.all(np.abs(args - target) <= maxDiff, axis=-1)
 def genColorsHUE(N):
 	'''generates N colors distinct in hue'''
@@ -198,8 +198,9 @@ def findSpanEnds(bars: Bars, spans: Spans) -> Spans:
 	return spans[fits]
 def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
-	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens, maxDiff=NUM_BASEWIDTHS)
+	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens[..., np.newaxis], maxDiff=NUM_BASEWIDTHS)
 	check(good.any(), 'incorrect code len')
+	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans[good]
 
 # TODO use grad, lineidx
@@ -284,7 +285,7 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> list[D
 def checksumDigit(digits: Digits) -> bool:
 	checksum = digits.sum() + 2 * digits[1:-1:2].sum()
 	return checksum % 10 == 0
-def detectImage(images: Images) -> Digits:
+def detectImage(images: Images) -> tuple[Digits, npt.NDArray]:
 	lineReads = getScanLines(images)
 	detections = []
 	for gradIdx, parallels in enumerate(lineReads):
@@ -295,7 +296,7 @@ def detectImage(images: Images) -> Digits:
 				[detections.append(d) for d in digits if checksumDigit(d)]
 			except DetectionError as e:
 				print(f'{gradIdx}:{lineIdx:<2} ERROR:', e)
-	detections = np.unique(np.array(detections), axis=0)
+	detections = np.unique(np.array(detections), axis=0, return_counts=True)
 	return detections
 # drawing ----------------------------------------------------
 def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
@@ -319,9 +320,9 @@ def drawSpans(img: ColorImage, images: Images):
 			for span in spans:
 				lineSlice = img[span['gradIdx'], span['lineIdx']]
 				startEdge = bars[span['start'] - 4]
-				colorcodeQuietzone(lineSlice, span['moduleWidth'], startEdge)
+				colorcodeQuietzone(lineSlice, span['moduleWidth'].astype('int'), startEdge)
 				endEdge = bars[span['end']]
-				colorcodeQuietzone(lineSlice, span['moduleWidth'], endEdge, (0, 255, 0))
+				colorcodeQuietzone(lineSlice, span['moduleWidth'].astype('int'), endEdge, (0, 255, 0))
 def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, grads:int=1):
 	if lightness: cv2.imshow('lightness', toImg(images.lightness))
 	if localAverages: cv2.imshow('localAverages', toImg(images.localAverages))
@@ -336,8 +337,8 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 # IO --------------------------------------------------
 def processImg(img: ColorImage) -> Images:
 	images = prepareImg(img)
-	digits = detectImage(images)
-	if digits.size: print('detected:', digits)
+	digits, counts = detectImage(images)
+	if digits.size: print(f'detected: {digits} {counts[0]}x')
 	drawDebugs(images)
 	return images
 	# TODO choose final read
@@ -354,14 +355,16 @@ def showLoop(winname='input', camera: Optional[cv2.VideoCapture]=None, *, delay=
 	while cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
 		if camera:
 			img = showCameraInput(camera, winname)
-		if (key := cv2.waitKey(delay)) != -1:
-			if key in [ord('q'), 27]:
-				return False
-			elif key == 32:
-				if camera:
-					cv2.imwrite('camera-input.png', img)
-					return (True, img)
-				return True
+		try:
+			key = cv2.waitKey(delay)
+		except KeyboardInterrupt: return False
+		if key in [ord('q'), 27]:
+			return False
+		elif key == 32:
+			if camera:
+				cv2.imwrite('camera-input.png', img)
+				return (True, img)
+			return True
 def showSavedCamInput(winname: str, path='camera-input.png') -> ColorImage:
 	img = np.zeros((200, 200, 3), 'uint8') # default
 	if os.path.exists(path):
