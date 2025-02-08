@@ -36,7 +36,9 @@ Spans = npt.NDArray
 Groups = npt.NDArray
 Widths = npt.NDArray
 Digits = npt.NDArray
-class DetectionError(RuntimeError): # TODO name?
+class DetectionError(RuntimeError):
+	pass
+class PreSpanDetectionError(DetectionError): # NOTE 'nothing found' kind of unimportant errors
 	pass
 
 @dataclass # TODO rename?
@@ -75,8 +77,9 @@ def genColorsHUE(N):
 	rgbs = cv2.cvtColor(hsv[np.newaxis, :, :], cv2.COLOR_HSV2BGR)[0]
 	return rgbs
 
-def check(cond, msg):
+def check(cond, msg, prespan=False):
 	if cond: return
+	if prespan: raise PreSpanDetectionError(msg)
 	raise DetectionError(msg)
 	
 # preprocessing ----------------------------------------------
@@ -109,7 +112,6 @@ def prepareImg(img: ColorImage) -> Images:
 	'''TODO'''
 	# TODO resizing
 	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_CHUNKS).astype('int')
-	# print('CHUNK_SIZE', CHUNK_SIZE) # TODO logging, save?
 	images = Images(inputImg=paddToShape(img, NUM_CHUNKS * CHUNK_SIZE))
 	images.initLines()
 	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
@@ -176,16 +178,16 @@ def splitToBars(lineReads: Line) -> Bars:
 
 def findSpanStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
 	quietZoneIdxs = np.where(bars[:-5:2]['len'] >= MIN_QUIETZONE_WIDTH)[0] * 2
-	check(quietZoneIdxs.size, 'no quietzones found')
+	check(quietZoneIdxs.size, 'no quietzones found', True)
 	possibleStartPattern = bars[quietZoneIdxs[:, np.newaxis] + np.arange(4)]
 	# TODO floating?
-	moduleWidths = np.average(possibleStartPattern['len'][:, 1:], axis=1).astype('int64')
+	moduleWidths = np.average(possibleStartPattern['len'][:, 1:], axis=1) # .astype('int64')
 	# NOTE are bars in start tag same width?
 	good = differsByAtmost(moduleWidths, possibleStartPattern['len'][:, 1:])
-	check(good.any(), 'no start tags found')
+	check(good.any(), 'no start tags found', True)
 	# NOTE is quietzone thick enough?
 	good &= possibleStartPattern['len'][:, 0] >= moduleWidths * MIN_QUIETZONE_WIDTH
-	check(good.any(), 'starting quietzones are too narrow')
+	check(good.any(), 'starting quietzones are too narrow', True)
 
 	startPatterns = possibleStartPattern[good]
 	spans = np.zeros((startPatterns.shape[0]), SPANS_DTYPE)
@@ -197,12 +199,12 @@ def findSpanStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
 def findSpanEnds(bars: Bars, spans: Spans) -> Spans:
 	spans['end'] = spans['start'] + NUM_EDGES
 	fits = spans['end'] < bars.shape
-	check(fits.any(), 'not enough bars after quietzone')
+	check(fits.any(), 'not enough bars after quietzone', True)
 	return spans[fits]
 def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
 	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens[..., np.newaxis], maxDiff=NUM_BASEWIDTHS)
-	check(good.any(), 'incorrect code len')
+	check(good.any(), 'incorrect code len', True)
 	spans = spans[good]
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans
@@ -214,7 +216,7 @@ def findSpans(gradIdx: int, lineIdx: int, lineReads: np.ndarray[Line]) -> tuple[
 	* they start after start tag, end before quietzone)
 	'''
 	bars = splitToBars(lineReads)
-	check(bars.size >= NUM_EDGES, 'not enough bars on scanline')
+	check(bars.size >= NUM_EDGES, 'not enough bars on scanline', True)
 	spans = findSpanStarts(bars, gradIdx, lineIdx)
 	spans = findSpanEnds(bars, spans)
 	spans = checkCodeLen(bars, spans)
@@ -296,10 +298,11 @@ def detectImage(images: Images) -> Digits:
 		for lineIdx, points in enumerate(parallels):
 			try:
 				digits = detectLine(gradIdx, lineIdx, images, points)
-				print(f'{gradIdx}:{lineIdx:<2}', digits)
+				logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
 				[detections.append(d) for d in digits if checksumDigit(d)]
 			except DetectionError as e:
-				print(f'{gradIdx}:{lineIdx:<2} ERROR:', e)
+				lvl = [logging.INFO, logging.DEBUG][isinstance(e, PreSpanDetectionError)]
+				logging.log(lvl, f'scanline {gradIdx}:{lineIdx:<2} ERROR: {e}')
 	images.digits, images.detectionCounts = np.unique(np.array(detections), axis=0, return_counts=True)
 	return images.digits
 # drawing ----------------------------------------------------
@@ -342,7 +345,9 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 def processImg(img: ColorImage) -> Images:
 	images = prepareImg(img)
 	digits = detectImage(images)
-	if digits.size: print(f'detected: {digits} {images.detectionCounts[0]}x')
+	if digits.size:
+		l = [f'{d} {c}x' for d, c in zip(digits, images.detectionCounts)]
+		logging.info(f'detected: {"\t".join(l)}')
 	drawDebugs(images)
 	return images
 	# TODO choose final read
@@ -380,7 +385,7 @@ def showSavedCamInput(winname: str, path='camera-input.png') -> ColorImage:
 	if os.path.exists(path):
 		img = cv2.imread(path)
 	cv2.imshow(winname, img)
-	print('camera image shape', img.shape)
+	logging.info(f'camera image shape {img.shape}')
 	return img
 def cameraLoop(winname='Barcode reader - camera input'):
 	img = showSavedCamInput(winname)
@@ -398,21 +403,26 @@ def cameraLoop(winname='Barcode reader - camera input'):
 def testDataset(winname='input'):
 	os.chdir('barcode-dataset')
 	files = os.listdir()
-	detected = np.zeros(len(files), 'bool')
+	detected = np.zeros(len(files), 'int')
 	for i, file in enumerate(files):
 		img = cv2.imread(file)
 		cv2.imshow(winname, img)
 
 		images = processImg(img)
-		detected[i] = images.digits.size
+		detected[i] = images.digits.shape[0]
 
 		if not showLoop(winname): break
 	detected = detected[:i+1]
-	print(f'detected: {detected.sum()} / {detected.size} ({np.average(detected * 100):.0f} %)')
+	success = detected.astype('bool')
+	logging.info(f'detected: {success.sum()} / {success.size} ({np.average(success * 100):.0f} %)')
+	if np.any(overdetected := detected > 1):
+		logging.warning(f'overdetection: {np.sum(overdetected)}x')
 	
 def main():
-	# testDataset()
-	cameraLoop()
+	logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
+
+	testDataset()
+	# cameraLoop()
 
 	cv2.destroyAllWindows()
 
