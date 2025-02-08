@@ -50,6 +50,9 @@ class Images:
 	linesImg: ColorImage = None
 
 	lines: list[list[tuple[Bars, Spans]]] = None
+	digits: Digits = None
+	detectionCounts: npt.NDArray[np.int64] = None
+
 	def initLines(self):
 		self.lines = [[]] * NUM_GRADIENTS
 	def addLine(self, gradIdx: int, bars: Bars, spans: Spans):
@@ -200,8 +203,9 @@ def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
 	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens[..., np.newaxis], maxDiff=NUM_BASEWIDTHS)
 	check(good.any(), 'incorrect code len')
+	spans = spans[good]
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
-	return spans[good]
+	return spans
 
 # TODO use grad, lineidx
 def findSpans(gradIdx: int, lineIdx: int, lineReads: np.ndarray[Line]) -> tuple[Bars, Spans]:
@@ -285,7 +289,7 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> list[D
 def checksumDigit(digits: Digits) -> bool:
 	checksum = digits.sum() + 2 * digits[1:-1:2].sum()
 	return checksum % 10 == 0
-def detectImage(images: Images) -> tuple[Digits, npt.NDArray]:
+def detectImage(images: Images) -> Digits:
 	lineReads = getScanLines(images)
 	detections = []
 	for gradIdx, parallels in enumerate(lineReads):
@@ -296,8 +300,8 @@ def detectImage(images: Images) -> tuple[Digits, npt.NDArray]:
 				[detections.append(d) for d in digits if checksumDigit(d)]
 			except DetectionError as e:
 				print(f'{gradIdx}:{lineIdx:<2} ERROR:', e)
-	detections = np.unique(np.array(detections), axis=0, return_counts=True)
-	return detections
+	images.digits, images.detectionCounts = np.unique(np.array(detections), axis=0, return_counts=True)
+	return images.digits
 # drawing ----------------------------------------------------
 def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
 	'''draws all line reads grouped by gradient with debug info'''
@@ -337,8 +341,8 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 # IO --------------------------------------------------
 def processImg(img: ColorImage) -> Images:
 	images = prepareImg(img)
-	digits, counts = detectImage(images)
-	if digits.size: print(f'detected: {digits} {counts[0]}x')
+	digits = detectImage(images)
+	if digits.size: print(f'detected: {digits} {images.detectionCounts[0]}x')
 	drawDebugs(images)
 	return images
 	# TODO choose final read
@@ -349,18 +353,24 @@ def showCameraInput(camera: cv2.VideoCapture, winname: str) -> ColorImage:
 		raise RuntimeError('no camera input')
 	cv2.imshow(winname, img)
 	return img
+
+FLAG_FREERUN = False
 def showLoop(winname='input', camera: Optional[cv2.VideoCapture]=None, *, delay=10) -> bool:
 	'''waits in loop after showing the results
 	* returns whether to continue'''
+	global FLAG_FREERUN
 	while cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
 		if camera:
 			img = showCameraInput(camera, winname)
 		try:
 			key = cv2.waitKey(delay)
 		except KeyboardInterrupt: return False
-		if key in [ord('q'), 27]:
+		if key in [ord('q'), 27]: # quit
 			return False
-		elif key == 32:
+		elif key == ord('r'): # toggle run
+			FLAG_FREERUN = not FLAG_FREERUN
+		elif key == 32 or FLAG_FREERUN: # step
+			if key == 32: FLAG_FREERUN = False
 			if camera:
 				cv2.imwrite('camera-input.png', img)
 				return (True, img)
@@ -387,12 +397,18 @@ def cameraLoop(winname='Barcode reader - camera input'):
 
 def testDataset(winname='input'):
 	os.chdir('barcode-dataset')
-	for file in os.listdir():
+	files = os.listdir()
+	detected = np.zeros(len(files), 'bool')
+	for i, file in enumerate(files):
 		img = cv2.imread(file)
 		cv2.imshow(winname, img)
 
-		processImg(img)
+		images = processImg(img)
+		detected[i] = images.digits.size
+
 		if not showLoop(winname): break
+	detected = detected[:i+1]
+	print(f'detected: {detected.sum()} / {detected.size} ({np.average(detected * 100):.0f} %)')
 	
 def main():
 	# testDataset()
