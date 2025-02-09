@@ -38,8 +38,6 @@ Widths = npt.NDArray
 Digits = npt.NDArray
 class DetectionError(RuntimeError):
 	pass
-class PreSpanDetectionError(DetectionError): # NOTE 'nothing found' kind of unimportant errors
-	pass
 
 @dataclass # TODO rename?
 class Images:
@@ -77,11 +75,15 @@ def genColorsHUE(N):
 	rgbs = cv2.cvtColor(hsv[np.newaxis, :, :], cv2.COLOR_HSV2BGR)[0]
 	return rgbs
 
-def check(cond, msg, prespan=False):
+def check(cond, msg):
 	if cond: return
-	if prespan: raise PreSpanDetectionError(msg)
 	raise DetectionError(msg)
-	
+def logErr(e: DetectionError, gradIdx: int, lineIdx: int, spanIdx: int=None):
+	lvl = logging.INFO if spanIdx is not None else logging.DEBUG
+	name = 'span' if spanIdx is not None else 'scanline'
+	spanLoc = f':{spanIdx}' * (spanIdx is not None)
+	logging.log(lvl, f'{name} {gradIdx}:{lineIdx:<2}{spanLoc} ERROR: {e}')
+
 # preprocessing ----------------------------------------------
 def paddToShape(img: np.ndarray, shape) -> np.ndarray:
 	'''padds img to shape by repeating pixels at the edges'''
@@ -178,16 +180,16 @@ def splitToBars(lineReads: Line) -> Bars:
 
 def findSpanStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
 	quietZoneIdxs = np.where(bars[:-5:2]['len'] >= MIN_QUIETZONE_WIDTH)[0] * 2
-	check(quietZoneIdxs.size, 'no quietzones found', True)
+	check(quietZoneIdxs.size, 'no quietzones found')
 	possibleStartPattern = bars[quietZoneIdxs[:, np.newaxis] + np.arange(4)]
 	# TODO floating?
 	moduleWidths = np.average(possibleStartPattern['len'][:, 1:], axis=1) # .astype('int64')
 	# NOTE are bars in start tag same width?
 	good = differsByAtmost(moduleWidths, possibleStartPattern['len'][:, 1:])
-	check(good.any(), 'no start tags found', True)
+	check(good.any(), 'no start tags found')
 	# NOTE is quietzone thick enough?
 	good &= possibleStartPattern['len'][:, 0] >= moduleWidths * MIN_QUIETZONE_WIDTH
-	check(good.any(), 'starting quietzones are too narrow', True)
+	check(good.any(), 'starting quietzones are too narrow')
 
 	startPatterns = possibleStartPattern[good]
 	spans = np.zeros((startPatterns.shape[0]), SPANS_DTYPE)
@@ -199,12 +201,12 @@ def findSpanStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
 def findSpanEnds(bars: Bars, spans: Spans) -> Spans:
 	spans['end'] = spans['start'] + NUM_EDGES
 	fits = spans['end'] < bars.shape
-	check(fits.any(), 'not enough bars after quietzone', True)
+	check(fits.any(), 'not enough bars after quietzone')
 	return spans[fits]
 def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
 	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens[..., np.newaxis], maxDiff=NUM_BASEWIDTHS)
-	check(good.any(), 'incorrect code len', True)
+	check(good.any(), 'incorrect code len')
 	spans = spans[good]
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans
@@ -216,7 +218,7 @@ def findSpans(gradIdx: int, lineIdx: int, lineReads: np.ndarray[Line]) -> tuple[
 	* they start after start tag, end before quietzone)
 	'''
 	bars = splitToBars(lineReads)
-	check(bars.size >= NUM_EDGES, 'not enough bars on scanline', True)
+	check(bars.size >= NUM_EDGES, 'not enough bars on scanline')
 	spans = findSpanStarts(bars, gradIdx, lineIdx)
 	spans = findSpanEnds(bars, spans)
 	spans = checkCodeLen(bars, spans)
@@ -279,13 +281,19 @@ def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
 	return digits
 def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> list[Digits]:
 	'''fully processes detection on single line'''
-	bars, spans = findSpans(gradIdx, lineIdx, lineReads)
+	try:
+		bars, spans = findSpans(gradIdx, lineIdx, lineReads)
+	except DetectionError as e:
+		return logErr(e, gradIdx, lineIdx)
 	images.addLine(gradIdx, bars, spans)
 	detections = []
-	for span in spans:
-		digitGroups = splitOnTags(span, bars)
-		detected = decodeDigits(span, digitGroups)
-		detections.append(detected)
+	for spanIdx, span in enumerate(spans):
+		try:
+			digitGroups = splitOnTags(span, bars)
+			detected = decodeDigits(span, digitGroups)
+			detections.append(detected)
+		except DetectionError as e:
+			logErr(e, gradIdx, lineIdx, spanIdx)
 	return detections
 
 def checksumDigit(digits: Digits) -> bool:
@@ -296,13 +304,10 @@ def detectImage(images: Images) -> Digits:
 	detections = []
 	for gradIdx, parallels in enumerate(lineReads):
 		for lineIdx, points in enumerate(parallels):
-			try:
-				digits = detectLine(gradIdx, lineIdx, images, points)
-				logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
-				[detections.append(d) for d in digits if checksumDigit(d)]
-			except DetectionError as e:
-				lvl = [logging.INFO, logging.DEBUG][isinstance(e, PreSpanDetectionError)]
-				logging.log(lvl, f'scanline {gradIdx}:{lineIdx:<2} ERROR: {e}')
+			digits = detectLine(gradIdx, lineIdx, images, points)
+			if not digits: continue
+			logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
+			[detections.append(d) for d in digits if checksumDigit(d)]
 	images.digits, images.detectionCounts = np.unique(np.array(detections), axis=0, return_counts=True)
 	return images.digits
 # drawing ----------------------------------------------------
@@ -343,6 +348,7 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 
 # IO --------------------------------------------------
 def processImg(img: ColorImage, num: int) -> Images:
+	logging.info(f'DETECTING {num:>03} {img.shape} ----------------------------------------')
 	images = prepareImg(img)
 	digits = detectImage(images)
 	if digits.size:
