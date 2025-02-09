@@ -66,7 +66,7 @@ def toImg(arr: np.ndarray) -> ColorImage:
 	if len(arr.shape) == 2 or arr.shape[-1] != 3: arr = np.repeat(arr[..., np.newaxis], 3, axis=-1)
 	return arr.astype('uint8')
 
-def differsByAtmost(target, args: npt.NDArray, maxDiff=2) -> bool:
+def differsByAtmost(target, args: npt.NDArray, maxDiff=3.5) -> bool:
 	'''if all args differ from target by at most maxDiff'''
 	if target.ndim < args.ndim: target = target[..., np.newaxis]
 	return np.all(np.abs(args - target) <= maxDiff, axis=-1)
@@ -342,15 +342,21 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 		drawGradLineReads(lineReadImgs, grads == 1)
 
 # IO --------------------------------------------------
-def processImg(img: ColorImage) -> Images:
+def processImg(img: ColorImage, num: int) -> Images:
 	images = prepareImg(img)
 	digits = detectImage(images)
 	if digits.size:
 		l = [f'{d} {c}x' for d, c in zip(digits, images.detectionCounts)]
-		logging.info(f'detected: {"\t".join(l)}')
+		logging.info(f'{num:>03} detected: {"\t".join(l)}')
 	drawDebugs(images)
 	return images
 	# TODO choose final read
+
+def showStatistics(detected: npt.NDArray[np.int64]):
+	success = detected.astype('bool')
+	logging.info(f'detected: {success.sum()} / {success.size} ({np.average(success * 100):.0f} %)')
+	if np.any(overdetected := detected > 1):
+		logging.warning(f'overdetection: {np.sum(overdetected)}x')
 
 def showCameraInput(camera: cv2.VideoCapture, winname: str) -> ColorImage:
 	ret, img = camera.read()
@@ -390,8 +396,11 @@ def showSavedCamInput(winname: str, path='camera-input.png') -> ColorImage:
 def cameraLoop(winname='Barcode reader - camera input'):
 	img = showSavedCamInput(winname)
 	camera = cv2.VideoCapture(0)
+	detected = np.zeros((0,), 'int')
 	while cv2.getWindowProperty(winname, cv2.WND_PROP_VISIBLE) >= 1:
-		images = processImg(img)
+		images = processImg(img, detected.shape[0])
+		detected = np.append(detected, images.digits.shape[0])
+
 		if start := 'start' not in vars(): # NOTE wait for input to start capture
 			if not showLoop(winname, camera=None):
 				break
@@ -399,6 +408,7 @@ def cameraLoop(winname='Barcode reader - camera input'):
 		if not ret: break
 		cv2.imshow('input', img := ret[1])
 	camera.release()
+	showStatistics(detected)
 
 def testDataset(winname='input'):
 	os.chdir('barcode-dataset')
@@ -408,16 +418,11 @@ def testDataset(winname='input'):
 		img = cv2.imread(file)
 		cv2.imshow(winname, img)
 
-		images = processImg(img)
+		images = processImg(img, i)
 		detected[i] = images.digits.shape[0]
-
+		# TODO check against filename tag
 		if not showLoop(winname): break
-	detected = detected[:i+1]
-	success = detected.astype('bool')
-	logging.info(f'detected: {success.sum()} / {success.size} ({np.average(success * 100):.0f} %)')
-	if np.any(overdetected := detected > 1):
-		logging.warning(f'overdetection: {np.sum(overdetected)}x')
-	
+	showStatistics(detected[:i+1])	
 def main():
 	logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 
