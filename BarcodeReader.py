@@ -4,7 +4,6 @@ from typing import Optional
 import cv2
 import os
 import math
-import skimage
 import logging
 from dataclasses import dataclass
 # parameters -----------------------------------
@@ -130,7 +129,8 @@ def genDrawLines(starts, ends, images: Images):
 		color = tuple(map(int, color))
 		linePs.append([])
 		for start, end in zip(*parallelEndpoints):
-			line = np.array(skimage.draw.line(*start, *end)).T
+			numPoints = np.abs(start - end).max() + 1
+			line = np.linspace(start, end, numPoints).astype('int32')
 			linePs[-1].append(line)
 			maxLen = max(maxLen, len(line))
 			cv2.line(images.linesImg, start[::-1], end[::-1], color)
@@ -428,7 +428,7 @@ def testDataset(winname='input'):
 		detected[i] = images.digits.shape[0]
 		# TODO check against filename tag
 		if not showLoop(winname): break
-	showStatistics(detected[:i+1])	
+	showStatistics(detected[:i+1])
 def main():
 	logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 
