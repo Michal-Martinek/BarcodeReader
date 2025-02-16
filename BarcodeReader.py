@@ -1,11 +1,18 @@
 import numpy as np
 import numpy.typing as npt
-from typing import Optional
 import cv2
-import os
-import math
+import matplotlib.pyplot as plt
+
+import os, sys
 import logging
 from dataclasses import dataclass
+from typing import Optional
+
+if getattr(sys, 'frozen', False):
+    os.chdir(os.path.dirname(sys.executable))
+else:
+    os.chdir(os.path.dirname(__file__))
+
 # parameters -----------------------------------
 NUM_CHUNKS = (6, 6) # TODO rename
 
@@ -23,14 +30,14 @@ Lightness = npt.NDArray[np.float64]
 '''values of lightness [0, 1]'''
 BinaryImg = npt.NDArray[np.bool]
 '''True - white, False - black'''
-LineReads = npt.NDArray[np.bool]
-'''binary reads over all scanline gradients
-shape - (gradient, line, point)'''
-Line = npt.NDArray[np.bool]
-BAR_DTYPE = [('start', np.int64), ('len', np.int64), ('idx', np.int64)]
+LineReads = npt.NDArray[np.float64]
+'''lightness over line  
+shape = (gradient, line, point)'''
+Line = npt.NDArray[np.float64]
+BAR_DTYPE = [('start', np.int64), ('len', np.float32), ('idx', np.int64)]
 Bars = npt.NDArray # TODO
 # TODO not class?
-SPANS_DTYPE = [('start', np.int64), ('moduleWidth', np.float16), ('end', np.int64), ('gradIdx', np.int64), ('lineIdx', np.int64)]
+SPANS_DTYPE = [('start', np.int64), ('end', np.int64), ('moduleWidth', np.float32), ('gradIdx', np.int64), ('lineIdx', np.int64)]
 Spans = npt.NDArray
 Groups = npt.NDArray
 Widths = npt.NDArray
@@ -43,7 +50,7 @@ class Images:
 	'''class holding all intermediate steps outputs for further use'''
 	inputImg: ColorImage
 	lightness: Lightness = None
-	localAverages: Lightness = None
+	avgLightness: Lightness = None
 	BaW: BinaryImg = None
 	lineReads: LineReads = None
 	linesImg: ColorImage = None
@@ -105,7 +112,6 @@ def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -
 	kernelSize = np.floor_divide(CHUNK_SIZE, blurSizeRatio).astype('int')
 	localAverages = np.repeat(localAverages, CHUNK_SIZE[1], axis=1)
 	if blurSizeRatio: localAverages = cv2.blur(localAverages, kernelSize)
-	images.localAverages = localAverages
 	averages = mix(0.5, localAverages, np.average(images.lightness))
 	return averages
 
@@ -117,23 +123,22 @@ def prepareImg(img: ColorImage) -> Images:
 	images.initLines()
 	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
 
-	avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
-	images.BaW = images.lightness > avgLightness
+	images.avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
+	images.BaW = images.lightness > images.avgLightness
 	return images
 # scanlines ------------------------------
-def genDrawLines(starts, ends, images: Images):
+def genDrawLines(starts, ends, images: Images) -> tuple[list[list[Point]], int]:
 	images.linesImg = toImg(images.lightness)
 	linePs = []
 	maxLen = 0
 	for color, parallelEndpoints in zip(genColorsHUE(starts.shape[0]), zip(starts, ends)):
-		color = tuple(map(int, color))
 		linePs.append([])
 		for start, end in zip(*parallelEndpoints):
 			numPoints = np.abs(start - end).max() + 1
 			line = np.linspace(start, end, numPoints).astype('int32')
 			linePs[-1].append(line)
 			maxLen = max(maxLen, len(line))
-			cv2.line(images.linesImg, start[::-1], end[::-1], color)
+			cv2.line(images.linesImg, start[::-1], end[::-1], tuple(map(int, color)))
 	return linePs, maxLen
 
 def getScanlineEndpoints(shape: tuple) -> tuple:
@@ -155,25 +160,32 @@ def getScanlineEndpoints(shape: tuple) -> tuple:
 	endPoints = startPoints + scales[..., np.newaxis] * gradVecs[:, np.newaxis]
 	return startPoints, endPoints.astype('int')
 def getScanLines(images: Images) -> LineReads:
-	startPoints, endPoints = getScanlineEndpoints(images.BaW.shape)
+	startPoints, endPoints = getScanlineEndpoints(images.lightness.shape)
 	linePs, maxLen = genDrawLines(startPoints, endPoints, images)
 
-	images.lineReads = np.zeros((len(linePs), len(linePs[0]), maxLen), dtype='bool')
+	images.lineReads = np.zeros((len(linePs), len(linePs[0]), maxLen))
 	for g, grad in enumerate(linePs):
 		for lineIdx, points in enumerate(grad):
-			images.lineReads[g, lineIdx, np.arange(len(points))] = images.BaW[*points.T]
+			images.lineReads[g, lineIdx, np.arange(len(points))] = images.lightness[*points.T] - images.avgLightness[*points.T]
 	return images.lineReads
 
 def splitToBars(lineReads: Line) -> Bars:
 	'''ignores first bar if it's black'''
-	edges = np.logical_xor(lineReads[:-1], lineReads[1:])
+	BaW = lineReads > 0.
+	edges = np.logical_xor(BaW[:-1], BaW[1:])
 	barStarts = np.where(edges)[0] + 1
-	if lineReads[0] == False:
+	if lineReads[0] <= 0.:
 		barStarts = barStarts[1:]
+	edgePairs = lineReads[[barStarts - 1, barStarts]]
+	xIntersect = edgePairs[1] / (edgePairs[1] - edgePairs[0])
+	# NOTE x intersect of line connecting edge points
+	# distance from second point: dx = y / dy
+
 	bars = np.zeros((len(barStarts) + 1,), dtype=BAR_DTYPE)
 	bars[1:]['start'] = barStarts
-	bars[:-1]['len'] = bars[1:]['start']
+	bars[:-1]['len'] = bars[1:]['start'] - xIntersect
 	bars[-1]['len'] = len(lineReads)
+	bars[1:]['len'] += xIntersect
 	bars['len'] -= bars['start']
 	bars['idx'] = np.arange(len(barStarts) + 1)
 	return bars
@@ -182,8 +194,7 @@ def findSpanStarts(bars: Bars, gradIdx, lineIdx) -> Spans:
 	quietZoneIdxs = np.where(bars[:-5:2]['len'] >= MIN_QUIETZONE_WIDTH)[0] * 2
 	check(quietZoneIdxs.size, 'no quietzones found')
 	possibleStartPattern = bars[quietZoneIdxs[:, np.newaxis] + np.arange(4)]
-	# TODO floating?
-	moduleWidths = np.average(possibleStartPattern['len'][:, 1:], axis=1) # .astype('int64')
+	moduleWidths = np.average(possibleStartPattern['len'][:, 1:], axis=1)
 	# NOTE are bars in start tag same width?
 	good = differsByAtmost(moduleWidths, possibleStartPattern['len'][:, 1:])
 	check(good.any(), 'no start tags found')
@@ -212,7 +223,7 @@ def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	return spans
 
 # TODO use grad, lineidx
-def findSpans(gradIdx: int, lineIdx: int, lineReads: np.ndarray[Line]) -> tuple[Bars, Spans]:
+def findSpans(gradIdx: int, lineIdx: int, lineReads: Line) -> tuple[Bars, Spans]:
 	'''finds spans of bars in possible barcode
 	* the spans have right width and # of bars
 	* they start after start tag, end before quietzone)
@@ -279,7 +290,7 @@ def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
 	firstDigit = FIRST_DIGIT_ENCODING.get(tuple(parity[0]), 0)
 	digits = np.concat(((firstDigit,), digits), axis=0)
 	return digits
-def detectLine(gradIdx, lineIdx, images: Images, lineReads: LineReads) -> list[Digits]:
+def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits]:
 	'''fully processes detection on single line'''
 	try:
 		bars, spans = findSpans(gradIdx, lineIdx, lineReads)
@@ -324,7 +335,7 @@ def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
 		cv2.imshow(winname, linImg)
 def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
 	fourths = 2 * (color[2] != 0) + 1
-	off = quietzoneEdge['start'] + (quietzoneEdge['len'] // 4) * fourths
+	off = quietzoneEdge['start'] + (quietzoneEdge['len'] / 4 * fourths).astype('int')
 	lineSlice[off : off + basewidth] = color
 def drawSpans(img: ColorImage, images: Images):
 	for grad in images.lines:
@@ -342,7 +353,7 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 	cv2.imshow('linesImg', images.linesImg)
 
 	if grads:
-		lineReadImgs = toImg(images.lineReads)
+		lineReadImgs = toImg(images.lineReads > 0.)
 		drawSpans(lineReadImgs, images)
 		drawGradLineReads(lineReadImgs, grads == 1)
 
