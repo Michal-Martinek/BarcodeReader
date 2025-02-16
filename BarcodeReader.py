@@ -276,8 +276,8 @@ FIRST_DIGIT_ENCODING = {
 def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
 	'''finds the closest digit encoding for given span (minimum squared distance)'''
 	lens = digitGroups['len'].reshape((2, 6, 4))
-	encodings = DIGIT_ENCODINGS * span['moduleWidth']
-	encodings = np.concat((encodings, encodings[..., ::-1]))
+	lens = lens * 7 / lens.sum(-1, keepdims=True)
+	encodings = np.concat((DIGIT_ENCODINGS, DIGIT_ENCODINGS[..., ::-1])) # NOTE construct G code (reverse order)
 	distances = np.sum((lens[..., np.newaxis, :] - encodings) ** 2, axis=-1)
 
 	digits = np.argmin(distances, axis=-1)
