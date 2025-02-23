@@ -311,6 +311,13 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits
 def checksumDigit(digits: Digits) -> bool:
 	checksum = digits.sum() + 2 * digits[1:-1:2].sum()
 	return checksum % 10 == 0
+def chooseDetection(images: Images, detections: list[Digits]) -> Digits:
+	images.digits, counts = np.unique(np.array(detections), axis=0, return_counts=True)
+	if not len(detections): return np.array([])
+	indices = np.argsort(-counts)
+	images.digits = images.digits[indices]
+	images.detectionCounts = counts[indices]
+	return images.digits[0]
 def detectImage(images: Images) -> Digits:
 	lineReads = getScanLines(images)
 	detections = []
@@ -320,8 +327,7 @@ def detectImage(images: Images) -> Digits:
 			if not digits: continue
 			logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
 			[detections.append(d) for d in digits if checksumDigit(d)]
-	images.digits, images.detectionCounts = np.unique(np.array(detections), axis=0, return_counts=True)
-	return images.digits
+	return chooseDetection(images, detections)
 # drawing ----------------------------------------------------
 def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
 	'''draws all line reads grouped by gradient with debug info'''
@@ -364,11 +370,10 @@ def processImg(img: ColorImage, num: int) -> Images:
 	images = prepareImg(img)
 	digits = detectImage(images)
 	if digits.size:
-		l = [f'{d} {c}x' for d, c in zip(digits, images.detectionCounts)]
+		l = [f'{d} {c}x' for d, c in zip(images.digits, images.detectionCounts)]
 		logging.info(f'{num:>03} detected: {"\t".join(l)}')
 	drawDebugs(images)
 	return images
-	# TODO choose final read
 
 def showStatistics(detected: npt.NDArray[np.int64]):
 	success = detected.astype('bool')
