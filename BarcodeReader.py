@@ -14,7 +14,7 @@ else:
     os.chdir(os.path.dirname(__file__))
 
 # parameters -----------------------------------
-NUM_CHUNKS = (6, 6) # TODO rename
+NUM_AVERAGING_CHUNKS = (6, 6)
 
 SCANLINE_DIST = 40
 NUM_GRADIENTS = 2 + 3 # TODO count, rename
@@ -24,30 +24,33 @@ NUM_EDGES = 4 * 12 + 5 + 3
 
 # type hints -----------------------------------
 Point = tuple[int, int]
-# TODO descriptions
 ColorImage = npt.NDArray[np.uint8]
 Lightness = npt.NDArray[np.float64]
 '''values of lightness [0, 1]'''
 BinaryImg = npt.NDArray[np.bool]
 '''True - white, False - black'''
-LineReads = npt.NDArray[np.float64]
-'''lightness over line  
-shape = (gradient, line, point)'''
 Line = npt.NDArray[np.float64]
+'''lightness reads over line'''
+LineReads = npt.NDArray[np.float64]
+'''lightness reads over line  
+shape = (gradient, line, point)'''
 BAR_DTYPE = [('start', np.int64), ('len', np.float32), ('idx', np.int64)]
-Bars = npt.NDArray # TODO
-# TODO not class?
+Bars = npt.NDArray
+'''runs of pixels of same color along Line'''
 SPANS_DTYPE = [('start', np.int64), ('end', np.int64), ('moduleWidth', np.float32), ('gradIdx', np.int64), ('lineIdx', np.int64)]
 Spans = npt.NDArray
+'''sequence of NUM_EDGES bars possibly containing a barcode'''
 Groups = npt.NDArray
-Widths = npt.NDArray
+'''Bars grouped to individual Digits, shape = (2, 6, 4)'''
 Digits = npt.NDArray
+'''digits detected in Span'''
+
 class DetectionError(RuntimeError):
 	pass
 
-@dataclass # TODO rename?
+@dataclass
 class Images:
-	'''class holding all intermediate steps outputs for further use'''
+	'''class holding all intermediate outputs for insight'''
 	inputImg: ColorImage
 	lightness: Lightness = None
 	avgLightness: Lightness = None
@@ -116,14 +119,13 @@ def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -
 	return averages
 
 def prepareImg(img: ColorImage) -> Images:
-	'''TODO'''
 	# TODO resizing
-	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_CHUNKS).astype('int')
-	images = Images(inputImg=paddToShape(img, NUM_CHUNKS * CHUNK_SIZE))
+	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_AVERAGING_CHUNKS).astype('int')
+	images = Images(inputImg=paddToShape(img, NUM_AVERAGING_CHUNKS * CHUNK_SIZE))
 	images.initLines()
 	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
 
-	images.avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
+	images.avgLightness = averageLightness(images, NUM_AVERAGING_CHUNKS, CHUNK_SIZE)
 	images.BaW = images.lightness > images.avgLightness
 	return images
 # scanlines ------------------------------
@@ -222,7 +224,6 @@ def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans
 
-# TODO use grad, lineidx
 def findSpans(gradIdx: int, lineIdx: int, lineReads: Line) -> tuple[Bars, Spans]:
 	'''finds spans of bars in possible barcode
 	* the spans have right width and # of bars
