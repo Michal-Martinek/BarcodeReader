@@ -8,3 +8,13 @@ You can read the propositions [here](https://github.com/Michal-Martinek/BarcodeR
   - [ ] displaying of progress
   - [ ] choosing image input (camera, dataset, file...)
 - [ ] using detected code (displaying product info)
+
+## Setup
+- initial setup (Python 3.13.0)
+```sh
+pip install -r requirements.txt
+```
+- to bundle using [PyInstaller](https://pyinstaller.org/en/stable/)
+```sh
+./build.bat
+```
