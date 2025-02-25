@@ -3,10 +3,11 @@ You can read the propositions [here](https://github.com/Michal-Martinek/BarcodeR
 
 ## Roadplan
 - [x] successfully recognizes **85 %** of test images (**10 %** rate of overdetection)
-- [ ] UI
-  - [ ] one window
-  - [ ] displaying of progress
-  - [ ] choosing image input (camera, dataset, file...)
+- [x] UI
+  - [x] single window
+  - [x] displaying of intermediate detection steps
+  - [x] choosing image input - file, camera, dataset
+  - [ ] clickable scanlines for additional info
 - [ ] using detected code (displaying product info)
 
 ## Setup
@@ -14,7 +15,11 @@ You can read the propositions [here](https://github.com/Michal-Martinek/BarcodeR
 ```sh
 pip install -r requirements.txt
 ```
-- to bundle using [PyInstaller](https://pyinstaller.org/en/stable/)
+- running (GUI version)
+```sh
+python main.py
+```
+- bundling using [PyInstaller](https://pyinstaller.org/en/stable/)
 ```sh
 ./build.bat
 ```

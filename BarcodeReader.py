@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 if getattr(sys, 'frozen', False):
-    os.chdir(os.path.dirname(sys.executable))
+	os.chdir(os.path.dirname(sys.executable))
 else:
-    os.chdir(os.path.dirname(__file__))
+	os.chdir(os.path.dirname(__file__))
 
 # parameters -----------------------------------
-NUM_CHUNKS = (6, 6) # TODO rename
+NUM_AVERAGING_CHUNKS = (6, 6)
 
 SCANLINE_DIST = 40
 NUM_GRADIENTS = 2 + 3 # TODO count, rename
@@ -24,30 +24,33 @@ NUM_EDGES = 4 * 12 + 5 + 3
 
 # type hints -----------------------------------
 Point = tuple[int, int]
-# TODO descriptions
 ColorImage = npt.NDArray[np.uint8]
 Lightness = npt.NDArray[np.float64]
 '''values of lightness [0, 1]'''
 BinaryImg = npt.NDArray[np.bool]
 '''True - white, False - black'''
-LineReads = npt.NDArray[np.float64]
-'''lightness over line  
-shape = (gradient, line, point)'''
 Line = npt.NDArray[np.float64]
+'''lightness reads over line'''
+LineReads = npt.NDArray[np.float64]
+'''lightness reads over line  
+shape = (gradient, line, point)'''
 BAR_DTYPE = [('start', np.int64), ('len', np.float32), ('idx', np.int64)]
-Bars = npt.NDArray # TODO
-# TODO not class?
+Bars = npt.NDArray
+'''runs of pixels of same color along Line'''
 SPANS_DTYPE = [('start', np.int64), ('end', np.int64), ('moduleWidth', np.float32), ('gradIdx', np.int64), ('lineIdx', np.int64)]
 Spans = npt.NDArray
+'''sequence of NUM_EDGES bars possibly containing a barcode'''
 Groups = npt.NDArray
-Widths = npt.NDArray
+'''Bars grouped to individual Digits, shape = (2, 6, 4)'''
 Digits = npt.NDArray
+'''digits detected in Span'''
+
 class DetectionError(RuntimeError):
 	pass
 
-@dataclass # TODO rename?
+@dataclass
 class Images:
-	'''class holding all intermediate steps outputs for further use'''
+	'''class holding all intermediate outputs for insight'''
 	inputImg: ColorImage
 	lightness: Lightness = None
 	avgLightness: Lightness = None
@@ -55,6 +58,7 @@ class Images:
 	lineReads: LineReads = None
 	linesImg: ColorImage = None
 
+	scanlineEndpoints: np.ndarray[np.int64] = None
 	lines: list[list[tuple[Bars, Spans]]] = None
 	digits: Digits = None
 	detectionCounts: npt.NDArray[np.int64] = None
@@ -116,14 +120,13 @@ def averageLightness(images: Images, NUM_CHUNKS, CHUNK_SIZE, blurSizeRatio=2.) -
 	return averages
 
 def prepareImg(img: ColorImage) -> Images:
-	'''TODO'''
 	# TODO resizing
-	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_CHUNKS).astype('int')
-	images = Images(inputImg=paddToShape(img, NUM_CHUNKS * CHUNK_SIZE))
+	CHUNK_SIZE = np.ceil(np.array(img.shape[:2]) / NUM_AVERAGING_CHUNKS).astype('int')
+	images = Images(inputImg=paddToShape(img, NUM_AVERAGING_CHUNKS * CHUNK_SIZE))
 	images.initLines()
 	images.lightness = cv2.cvtColor(images.inputImg, cv2.COLOR_BGR2GRAY) / 255
 
-	images.avgLightness = averageLightness(images, NUM_CHUNKS, CHUNK_SIZE)
+	images.avgLightness = averageLightness(images, NUM_AVERAGING_CHUNKS, CHUNK_SIZE)
 	images.BaW = images.lightness > images.avgLightness
 	return images
 # scanlines ------------------------------
@@ -141,7 +144,7 @@ def genDrawLines(starts, ends, images: Images) -> tuple[list[list[Point]], int]:
 			cv2.line(images.linesImg, start[::-1], end[::-1], tuple(map(int, color)))
 	return linePs, maxLen
 
-def getScanlineEndpoints(shape: tuple) -> tuple:
+def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
 	angles = np.linspace(0, np.pi / 2, NUM_GRADIENTS)
 	gradVecs = np.column_stack((np.sin(angles), np.cos(angles)))
 	# first ^ over y axis, then > on x axis
@@ -158,9 +161,11 @@ def getScanlineEndpoints(shape: tuple) -> tuple:
 	scales = np.min(scales, axis=-1)
 	startPoints = np.tile(startPoints, (len(gradVecs), 1, 1))
 	endPoints = startPoints + scales[..., np.newaxis] * gradVecs[:, np.newaxis]
-	return startPoints, endPoints.astype('int')
+	endPoints = endPoints.astype('int')
+	images.scanlineEndpoints = np.concatenate((startPoints, endPoints), axis=-1)
+	return startPoints, endPoints
 def getScanLines(images: Images) -> LineReads:
-	startPoints, endPoints = getScanlineEndpoints(images.lightness.shape)
+	startPoints, endPoints = getScanlineEndpoints(images.lightness.shape, images)
 	linePs, maxLen = genDrawLines(startPoints, endPoints, images)
 
 	images.lineReads = np.zeros((len(linePs), len(linePs[0]), maxLen))
@@ -222,7 +227,6 @@ def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans
 
-# TODO use grad, lineidx
 def findSpans(gradIdx: int, lineIdx: int, lineReads: Line) -> tuple[Bars, Spans]:
 	'''finds spans of bars in possible barcode
 	* the spans have right width and # of bars
@@ -286,7 +290,7 @@ def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
 	if parity[0, 0] == 0 and not _flipped: # NOTE read backwards
 		return decodeDigits(span, digitGroups[::-1, ::-1], _flipped=True)
 	check(np.all(parity[1] == 0), 'R-encoding expected in right half')
-	
+
 	firstDigit = FIRST_DIGIT_ENCODING.get(tuple(parity[0]), 0)
 	digits = np.concat(((firstDigit,), digits), axis=0)
 	return digits
@@ -310,6 +314,13 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits
 def checksumDigit(digits: Digits) -> bool:
 	checksum = digits.sum() + 2 * digits[1:-1:2].sum()
 	return checksum % 10 == 0
+def chooseDetection(images: Images, detections: list[Digits]) -> Digits:
+	images.digits, counts = np.unique(np.array(detections), axis=0, return_counts=True)
+	if not len(detections): return np.array([])
+	indices = np.argsort(-counts)
+	images.digits = images.digits[indices]
+	images.detectionCounts = counts[indices]
+	return images.digits[0]
 def detectImage(images: Images) -> Digits:
 	lineReads = getScanLines(images)
 	detections = []
@@ -319,8 +330,7 @@ def detectImage(images: Images) -> Digits:
 			if not digits: continue
 			logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
 			[detections.append(d) for d in digits if checksumDigit(d)]
-	images.digits, images.detectionCounts = np.unique(np.array(detections), axis=0, return_counts=True)
-	return images.digits
+	return chooseDetection(images, detections)
 # drawing ----------------------------------------------------
 def drawGradLineReads(lineReadImgs: list[ColorImage], onlyInteresting=True):
 	'''draws all line reads grouped by gradient with debug info'''
@@ -358,16 +368,15 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 		drawGradLineReads(lineReadImgs, grads == 1)
 
 # IO --------------------------------------------------
-def processImg(img: ColorImage, num: int) -> Images:
+def processImg(img: ColorImage, num: int, pyqt=False) -> Images:
 	logging.info(f'DETECTING {num:>03} {img.shape} ----------------------------------------')
 	images = prepareImg(img)
 	digits = detectImage(images)
 	if digits.size:
-		l = [f'{d} {c}x' for d, c in zip(digits, images.detectionCounts)]
+		l = [f'{d} {c}x' for d, c in zip(images.digits, images.detectionCounts)]
 		logging.info(f'{num:>03} detected: {"\t".join(l)}')
-	drawDebugs(images)
+	if not pyqt: drawDebugs(images)
 	return images
-	# TODO choose final read
 
 def showStatistics(detected: npt.NDArray[np.int64]):
 	success = detected.astype('bool')
