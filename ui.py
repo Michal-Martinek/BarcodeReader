@@ -210,16 +210,27 @@ class DebugRibbon(QWidget):
 
 
 class CameraInput:
-	def __init__(self, interval=100, parent=None, *, signal: pyqtSignal):
+	def __init__(self, parent=None, *, signal: pyqtSignal):
 		super().__init__()
-		self.videoCapture = cv2.VideoCapture(0)
+		self.videoCapture: cv2.VideoCapture = None
 		self.signal: pyqtSignal = signal # [filename, QPixmap]
 
 		self.timer = QTimer()
-		self.timer.timeout.connect(self.cameraCapture)
-		self.timer.start(interval)
+		self.timer.timeout.connect(self.captureCamera)
+	def started(self):
+		return self.videoCapture != None
+	def start(self, interval_ms=100):
+		assert not self.started()
+		self.videoCapture = cv2.VideoCapture(0)
+		self.timer.start(interval_ms)
+	def end(self):
+		if not self.started(): return
+		self.timer.stop()
+		self.videoCapture.release()
+		self.videoCapture = None
 
-	def cameraCapture(self):
+	def captureCamera(self):
+		assert self.started(), 'not initialized'
 		ret, img = self.videoCapture.read()
 		if not ret:
 			return logging.error('camera input unavailable')
@@ -291,6 +302,8 @@ class BarcodeReaderUI(QMainWindow):
 		# Connect the debug ribbon signal so that clicking a debug image shows it in the main view.
 		self.debug_ribbon.debug_image_selected.connect(self.display_debug_image)
 
+		self.cameraInput = CameraInput(signal=self.image_loaded)
+
 	def onload(self, default_image='barcode-dataset/debug-img.png'):
 		self.showMaximized()
 		self.load_image_from_file(default_image)
@@ -300,6 +313,7 @@ class BarcodeReaderUI(QMainWindow):
 		self.load_image_from_file(os.path.join(folder, file))
 	def load_image_from_file(self, file=None):
 		"""Open a file dialog and load an image from disk."""
+		self.cameraInput.end()
 		file_path = file or QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")[0]
 		if not file_path: return
 		logging.info(f"Loading image from file: {os.path.basename(file_path)}")
@@ -308,9 +322,10 @@ class BarcodeReaderUI(QMainWindow):
 		self.main_image_view.set_image(pixmap)
 
 	def toggle_camera_capture(self):
-		"""Placeholder for camera input logic."""
-		# TODO toggle
-		self.cameraInput = CameraInput(signal=self.image_loaded)
+		if self.cameraInput.started():
+			self.cameraInput.end()
+		else:
+			self.cameraInput.start()
 
 	def display_debug_image(self, name: str, pixmap: QPixmap):
 		"""
