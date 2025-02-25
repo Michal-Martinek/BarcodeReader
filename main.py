@@ -1,4 +1,4 @@
-import sys
+import sys, os
 import numpy as np
 import cv2
 
@@ -7,6 +7,8 @@ from PyQt6.QtGui import QPixmap, QImage
 
 from BarcodeReader import toImg, processImg, chooseDetection
 from ui import BarcodeReaderUI
+
+os.chdir(os.path.dirname(__file__))
 
 class BarcodeProcessor:
 	def __init__(self, ui: BarcodeReaderUI):

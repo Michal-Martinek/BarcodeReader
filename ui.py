@@ -1,3 +1,5 @@
+import os
+import random
 import sys
 import cv2
 import numpy as np
@@ -208,17 +210,24 @@ class BarcodeReaderUI(QMainWindow):
 
 		# Top input options with icons and hover-over tooltips.
 		input_layout = QHBoxLayout()
-		self.btn_load_file = QPushButton()
-		self.btn_load_file.setIcon(QIcon("icons/open_file.png"))  # TODO: Set valid icon path.
+		self.btn_load_file = QPushButton(text='Load image')
+		# self.btn_load_file.setIcon(QIcon("icons/open_file.png"))
 		self.btn_load_file.setToolTip("Load image from file")
 		self.btn_load_file.clicked.connect(self.load_image_from_file)
 		input_layout.addWidget(self.btn_load_file)
 
-		self.btn_load_camera = QPushButton()
-		self.btn_load_camera.setIcon(QIcon("icons/camera.png"))  # TODO: Set valid icon path.
+		self.btn_random_input = QPushButton(text='Random input')
+		# self.btn_random_input.setIcon(QIcon("icons/camera.png"))
+		self.btn_random_input.setToolTip("Choose random image from dataset")
+		self.btn_random_input.clicked.connect(self.load_random_input_image)
+		input_layout.addWidget(self.btn_random_input)
+
+		self.btn_load_camera = QPushButton(text='Camera input')
+		# self.btn_load_camera.setIcon(QIcon("icons/camera.png"))
 		self.btn_load_camera.setToolTip("Load image from camera")
 		self.btn_load_camera.clicked.connect(self.load_image_from_camera)
 		input_layout.addWidget(self.btn_load_camera)
+
 		input_layout.addStretch()
 		main_layout.addLayout(input_layout)
 
@@ -249,7 +258,9 @@ class BarcodeReaderUI(QMainWindow):
 		self.showMaximized()
 		self.load_image_from_file(default_image)
 
-
+	def load_random_input_image(self, *, folder='barcode-dataset'):
+		file = random.choice(os.listdir(folder))
+		self.load_image_from_file(os.path.join(folder, file))
 	def load_image_from_file(self, file=None):
 		"""Open a file dialog and load an image from disk."""
 		file_path = file or QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")[0]
