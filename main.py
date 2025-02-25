@@ -6,7 +6,7 @@ import cv2
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap, QImage
 
-from BarcodeReader import processImg, chooseDetection
+from BarcodeReader import Digits, processImg, chooseDetection
 from ui import BarcodeReaderUI, numpy2Pixmap, pixmap2Numpy
 
 os.chdir(os.path.dirname(__file__))
@@ -25,10 +25,11 @@ class BarcodeProcessor:
 		This dummy implementation simply creates fake barcode text,
 		dummy debug images, and fake scanlines.
 		"""
-		barcode_text = self.detect_barcode(pixmap, image_path)
+		detected = self.detect_barcode(pixmap, image_path)
 		debug_images = self.generate_debug_images()
 		scanlines = self.get_scanlines(pixmap)
 
+		self.ui.main_image_view.reset_zoom()
 		# Update the UI:
 		# 1. Set the main image in the center.
 		self.ui.main_image_view.set_image(pixmap)
@@ -37,15 +38,15 @@ class BarcodeProcessor:
 		# 3. Populate the debug ribbon on the right.
 		self.ui.add_debug_images(debug_images)
 		# Update the detection result label.
-		self.ui.display_detection_result(barcode_text)
+		self.ui.display_detection_result(detected)
 		# 4. Emit the detected barcode (if you wish to hook it elsewhere)
-		self.ui.barcode_detected.emit(barcode_text)
-		logging.debug("Barcode Detected: {barcode_text}")
+		# self.ui.barcode_detected.emit(barcode_text)
+		logging.debug(f"Barcode Detected: {detected}")
 
-	def detect_barcode(self, pixmap: QPixmap, image_path):
+	def detect_barcode(self, pixmap: QPixmap, image_path) -> Digits:
 		self.images = processImg(pixmap2Numpy(pixmap), os.path.basename(image_path), pyqt=True)
 		read = chooseDetection(self.images, self.images.digits)
-		return ''.join(map(str, read))
+		return read
 
 	def generate_debug_images(self) -> dict:
 		# For demonstration, we'll use the same pixmap for all debug images.

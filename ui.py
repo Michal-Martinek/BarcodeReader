@@ -31,7 +31,7 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 	ptr = qimage.bits()
 	ptr.setsize(qimage.sizeInBytes())
 	arr = np.array(ptr).reshape(qimage.height(), qimage.width(), 4)
-	return arr[..., :3].astype('uint8')
+	return arr[..., 2::-1].astype('uint8')
 # -------------------------
 # Clickable Scanline
 # -------------------------
@@ -242,8 +242,8 @@ class CameraInput:
 class BarcodeReaderUI(QMainWindow):
 	# Signals for hooking up to your processing code.
 	image_loaded = pyqtSignal(str, QPixmap)  # (file path, image)
-	barcode_detected = pyqtSignal(str)         # Detected barcode text
-	debug_images_generated = pyqtSignal(dict)    # {debug image name: QPixmap}
+	# barcode_detected = pyqtSignal(str)         # Detected barcode text
+	# debug_images_generated = pyqtSignal(dict)    # {debug image name: QPixmap}
 
 	def __init__(self):
 		super().__init__()
@@ -341,8 +341,14 @@ class BarcodeReaderUI(QMainWindow):
 		self.debug_ribbon.clear_debug_images()
 		for name, pixmap in debug_images.items():
 			self.debug_ribbon.add_debug_image(name, pixmap)
-		self.debug_images_generated.emit(debug_images)
+		# self.debug_images_generated.emit(debug_images)
 
-	def display_detection_result(self, barcode_text: str):
+	def display_detection_result(self, detected: np.ndarray):
 		"""Update the detection result label."""
-		self.detection_label.setText(f"Detection Result: {barcode_text}")
+		text = "Detection Result: None"
+		if detected.size:
+			assert detected.shape == (13,)
+			s = ''.join(map(str, detected))
+			s = ' '.join((s[0], s[1:7], s[7:]))
+			text = f"Detection Result: {s}"
+		self.detection_label.setText(text)
