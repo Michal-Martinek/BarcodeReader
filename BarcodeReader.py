@@ -365,14 +365,14 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 		drawGradLineReads(lineReadImgs, grads == 1)
 
 # IO --------------------------------------------------
-def processImg(img: ColorImage, num: int) -> Images:
+def processImg(img: ColorImage, num: int, pyqt=False) -> Images:
 	logging.info(f'DETECTING {num:>03} {img.shape} ----------------------------------------')
 	images = prepareImg(img)
 	digits = detectImage(images)
 	if digits.size:
 		l = [f'{d} {c}x' for d, c in zip(images.digits, images.detectionCounts)]
 		logging.info(f'{num:>03} detected: {"\t".join(l)}')
-	# drawDebugs(images)
+	if not pyqt: drawDebugs(images)
 	return images
 
 def showStatistics(detected: npt.NDArray[np.int64]):

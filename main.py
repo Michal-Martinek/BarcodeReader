@@ -1,3 +1,4 @@
+import logging
 import sys, os
 import numpy as np
 import cv2
@@ -39,11 +40,10 @@ class BarcodeProcessor:
 		self.ui.display_detection_result(barcode_text)
 		# 4. Emit the detected barcode (if you wish to hook it elsewhere)
 		self.ui.barcode_detected.emit(barcode_text)
-		print("Barcode Detected:", barcode_text)
+		logging.debug("Barcode Detected: {barcode_text}")
 
 	def detect_barcode(self, image_path):
-		# Your barcode detection logic here
-		self.images = processImg(cv2.imread(image_path), image_path)
+		self.images = processImg(cv2.imread(image_path), os.path.basename(image_path), pyqt=True)
 		read = chooseDetection(self.images, self.images.digits)
 		return ''.join(map(str, read))
 	@staticmethod
@@ -82,6 +82,8 @@ class BarcodeProcessor:
 # Main Application Execution
 # -------------------------
 def main():
+	logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
+
 	app = QApplication(sys.argv)
 	ui = BarcodeReaderUI()
 	processor = BarcodeProcessor(ui)

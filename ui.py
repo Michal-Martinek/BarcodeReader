@@ -1,3 +1,4 @@
+import logging
 import os
 import random
 import sys
@@ -150,7 +151,7 @@ class MainImageView(QWidget):
 			if file_path:
 				self.current_image.save(file_path)
 		else:
-			print("No image to save")
+			logging.warning("No image to save")
 
 # -------------------------
 # Debug Ribbon Widget
@@ -264,23 +265,22 @@ class BarcodeReaderUI(QMainWindow):
 	def load_image_from_file(self, file=None):
 		"""Open a file dialog and load an image from disk."""
 		file_path = file or QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")[0]
-		if file_path:
-			pixmap = QPixmap(file_path)
-			self.image_loaded.emit(file_path, pixmap)
-			self.main_image_view.set_image(pixmap)
-			print("Image loaded from file:", file_path)
+		if not file_path: return
+		logging.info(f"Loading image from file: {os.path.basename(file_path)}")
+		pixmap = QPixmap(file_path)
+		self.image_loaded.emit(file_path, pixmap)
+		self.main_image_view.set_image(pixmap)
 
 	def load_image_from_camera(self):
 		"""Placeholder for camera input logic."""
 		# TODO: Implement camera capture and then emit image_loaded signal.
-		print("Camera input not implemented. Hook your camera logic here!")
+		logging.warning("Camera input not implemented. Hook your camera logic here!")
 
 	def display_debug_image(self, name: str, pixmap: QPixmap):
 		"""
 		Display a debug image (selected from the debug ribbon) in the main image view.
 		"""
 		self.main_image_view.set_image(pixmap)
-		print(f"Displaying debug image: {name}")
 
 	def add_debug_images(self, debug_images: dict):
 		"""
