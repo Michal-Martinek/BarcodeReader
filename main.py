@@ -6,8 +6,8 @@ import cv2
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap, QImage
 
-from BarcodeReader import toImg, processImg, chooseDetection
-from ui import BarcodeReaderUI
+from BarcodeReader import processImg, chooseDetection
+from ui import BarcodeReaderUI, numpy2Pixmap, pixmap2Numpy
 
 os.chdir(os.path.dirname(__file__))
 
@@ -25,7 +25,7 @@ class BarcodeProcessor:
 		This dummy implementation simply creates fake barcode text,
 		dummy debug images, and fake scanlines.
 		"""
-		barcode_text = self.detect_barcode(image_path)
+		barcode_text = self.detect_barcode(pixmap, image_path)
 		debug_images = self.generate_debug_images()
 		scanlines = self.get_scanlines(pixmap)
 
@@ -42,27 +42,20 @@ class BarcodeProcessor:
 		self.ui.barcode_detected.emit(barcode_text)
 		logging.debug("Barcode Detected: {barcode_text}")
 
-	def detect_barcode(self, image_path):
-		self.images = processImg(cv2.imread(image_path), os.path.basename(image_path), pyqt=True)
+	def detect_barcode(self, pixmap: QPixmap, image_path):
+		self.images = processImg(pixmap2Numpy(pixmap), os.path.basename(image_path), pyqt=True)
 		read = chooseDetection(self.images, self.images.digits)
 		return ''.join(map(str, read))
-	@staticmethod
-	def numpy2Pixmap(img: np.ndarray) -> QPixmap:
-		"""Convert a NumPy image array (OpenCV format) to QPixmap."""
-		img = toImg(img)
-		height, width, channels = img.shape
-		img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-		q_image = QImage(img.data, width, height, channels * width, QImage.Format.Format_RGB888)
-		return QPixmap.fromImage(q_image)
+
 	def generate_debug_images(self) -> dict:
 		# For demonstration, we'll use the same pixmap for all debug images.
 		return {
-			'Original': self.numpy2Pixmap(self.images.inputImg),
-			'Lightness': self.numpy2Pixmap(self.images.lightness),
-			'Black & white': self.numpy2Pixmap(self.images.BaW),
-			# 'lineReads': self.numpy2Pixmap(self.images.lineReads),
-			'Scanlines': self.numpy2Pixmap(self.images.linesImg),
-			'Average lightness': self.numpy2Pixmap(self.images.avgLightness),
+			'Original': numpy2Pixmap(self.images.inputImg),
+			'Lightness': numpy2Pixmap(self.images.lightness),
+			'Black & white': numpy2Pixmap(self.images.BaW),
+			# 'lineReads': numpy2Pixmap(self.images.lineReads),
+			'Scanlines': numpy2Pixmap(self.images.linesImg),
+			'Average lightness': numpy2Pixmap(self.images.avgLightness),
 		}
 
 	def get_scanlines(self, pixmap: QPixmap) -> list:

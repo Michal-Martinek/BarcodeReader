@@ -5,7 +5,7 @@ import sys
 import cv2
 import numpy as np
 from PyQt6 import QtCore
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QLineF
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QLineF, QThread, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QIcon
 from PyQt6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -13,6 +13,25 @@ from PyQt6.QtWidgets import (
 	QDialog, QDialogButtonBox, QGraphicsLineItem, QSizePolicy
 )
 
+def toImg(arr: np.ndarray):
+	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
+	if arr.dtype in (np.bool, np.float32, np.float64): arr = (arr * 255)
+	if len(arr.shape) == 2 or arr.shape[-1] != 3: arr = np.repeat(arr[..., np.newaxis], 3, axis=-1)
+	return arr.astype('uint8')
+def numpy2Pixmap(img: np.ndarray) -> QPixmap:
+	"""Convert a NumPy image array (OpenCV format) to QPixmap."""
+	img = toImg(img)
+	height, width, channels = img.shape
+	img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+	q_image = QImage(img.data, width, height, channels * width, QImage.Format.Format_RGB888)
+	return QPixmap.fromImage(q_image)
+def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
+	qimage = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+	# Access the underlying data (as a buffer) and convert to a NumPy array
+	ptr = qimage.bits()
+	ptr.setsize(qimage.sizeInBytes())
+	arr = np.array(ptr).reshape(qimage.height(), qimage.width(), 4)
+	return arr[..., :3].astype('uint8')
 # -------------------------
 # Clickable Scanline
 # -------------------------
@@ -189,6 +208,23 @@ class DebugRibbon(QWidget):
 				item.widget().deleteLater()
 		self.layout.addStretch()
 
+
+class CameraInput:
+	def __init__(self, interval=100, parent=None, *, signal: pyqtSignal):
+		super().__init__()
+		self.videoCapture = cv2.VideoCapture(0)
+		self.signal: pyqtSignal = signal # [filename, QPixmap]
+
+		self.timer = QTimer()
+		self.timer.timeout.connect(self.cameraCapture)
+		self.timer.start(interval)
+
+	def cameraCapture(self):
+		ret, img = self.videoCapture.read()
+		if not ret:
+			return logging.error('camera input unavailable')
+		self.signal.emit('Camera input', numpy2Pixmap(img))
+
 # -------------------------
 # Main UI Window
 # -------------------------
@@ -225,8 +261,8 @@ class BarcodeReaderUI(QMainWindow):
 
 		self.btn_load_camera = QPushButton(text='Camera input')
 		# self.btn_load_camera.setIcon(QIcon("icons/camera.png"))
-		self.btn_load_camera.setToolTip("Load image from camera")
-		self.btn_load_camera.clicked.connect(self.load_image_from_camera)
+		self.btn_load_camera.setToolTip("Capture image from camera")
+		self.btn_load_camera.clicked.connect(self.toggle_camera_capture)
 		input_layout.addWidget(self.btn_load_camera)
 
 		input_layout.addStretch()
@@ -271,10 +307,10 @@ class BarcodeReaderUI(QMainWindow):
 		self.image_loaded.emit(file_path, pixmap)
 		self.main_image_view.set_image(pixmap)
 
-	def load_image_from_camera(self):
+	def toggle_camera_capture(self):
 		"""Placeholder for camera input logic."""
-		# TODO: Implement camera capture and then emit image_loaded signal.
-		logging.warning("Camera input not implemented. Hook your camera logic here!")
+		# TODO toggle
+		self.cameraInput = CameraInput(signal=self.image_loaded)
 
 	def display_debug_image(self, name: str, pixmap: QPixmap):
 		"""
