@@ -27,14 +27,13 @@ class BarcodeProcessor:
 		"""
 		detected = self.detect_barcode(pixmap, image_path)
 		debug_images = self.generate_debug_images()
-		scanlines = self.get_scanlines(pixmap)
 
 		self.ui.main_image_view.reset_zoom()
 		# Update the UI:
 		# 1. Set the main image in the center.
 		self.ui.main_image_view.set_image(pixmap)
 		# 2. Add scanlines overlay on the main image.
-		self.ui.main_image_view.add_scanlines(scanlines)
+		self.ui.main_image_view.add_scanlines(self.images.scanlineEndpoints[..., ::-1])
 		# 3. Populate the debug ribbon on the right.
 		self.ui.add_debug_images(debug_images)
 		# Update the detection result label.
@@ -55,22 +54,8 @@ class BarcodeProcessor:
 			'Lightness': numpy2Pixmap(self.images.lightness),
 			'Black & white': numpy2Pixmap(self.images.BaW),
 			# 'lineReads': numpy2Pixmap(self.images.lineReads),
-			'Scanlines': numpy2Pixmap(self.images.linesImg),
 			'Average lightness': numpy2Pixmap(self.images.avgLightness),
 		}
-
-	def get_scanlines(self, pixmap: QPixmap) -> list:
-		"""
-		Create dummy scanlines as a list of tuples.
-		Each tuple represents a line with coordinates (x1, y1, x2, y2).
-		"""
-		w = pixmap.width()
-		h = pixmap.height()
-		return [ # TODO
-			(20, h * 0.25, w - 20, h * 0.25),
-			(20, h * 0.50, w - 20, h * 0.50),
-			(20, h * 0.75, w - 20, h * 0.75)
-		]
 
 # -------------------------
 # Main Application Execution

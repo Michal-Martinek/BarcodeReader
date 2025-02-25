@@ -6,12 +6,14 @@ import cv2
 import numpy as np
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QLineF, QThread, QTimer
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QIcon
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QIcon, QColor
 from PyQt6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
 	QLabel, QFileDialog, QGraphicsView, QGraphicsScene, QScrollArea, QCheckBox,
 	QDialog, QDialogButtonBox, QGraphicsLineItem, QSizePolicy
 )
+
+from BarcodeReader import NUM_GRADIENTS, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -35,20 +37,20 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 # -------------------------
 # Clickable Scanline
 # -------------------------
-class ClickableScanline(QObject, QGraphicsLineItem):
+class ClickableScanline(QGraphicsLineItem, QObject):
 	clicked = pyqtSignal(object)  # Emits self when clicked
 
-	def __init__(self, line: QLineF, parent=None):
+	def __init__(self, line: QLineF, color: QColor, *, parent=None):
 		QObject.__init__(self)
-		QGraphicsLineItem.__init__(line, parent)
+		QGraphicsLineItem.__init__(self, line, parent)
 		self.setAcceptHoverEvents(True)
-		self.default_pen = QPen(Qt.GlobalColor.red, 2)
-		self.highlight_pen = QPen(Qt.GlobalColor.green, 3)
+		self.default_pen = QPen(color, 1)
+		self.highlight_pen = QPen(Qt.GlobalColor.green, 2)
 		self.setPen(self.default_pen)
 
 	def mousePressEvent(self, event):
-		self.setPen(self.highlight_pen)
-		self.clicked.emit(self)
+		# self.setPen(self.highlight_pen)
+		# self.clicked.emit(self)
 		super().mousePressEvent(event)
 
 	def hoverEnterEvent(self, event):
@@ -112,8 +114,7 @@ class MainImageView(QWidget):
 		self.pixmap_item = self.scene.addPixmap(pixmap)
 		self.scene.setSceneRect(*pixmap.rect().getCoords())
 		# self.reset_zoom()
-		if self.scanline_checkbox.isChecked() and self.scanline_items_data:
-			self.add_scanlines(self.scanline_items_data)
+		self.add_scanlines(self.scanline_items_data)
 
 	def add_scanlines(self, lines_data):
 		"""
@@ -121,20 +122,17 @@ class MainImageView(QWidget):
 		lines_data: list of tuples (x1, y1, x2, y2)
 		"""
 		self.scanline_items_data = lines_data
-		for item in self.scanline_items:
-			self.scene.removeItem(item)
 		self.scanline_items.clear()
+		assert self.current_image
+		for grad, color in zip(lines_data, genColorsHUE(NUM_GRADIENTS)):
+			for coords in grad:
+				line = QLineF(*coords)
+				scanline = ClickableScanline(line, QColor(*color))
+				# scanline.clicked.connect(self.handle_scanline_clicked)
+				self.scene.addItem(scanline)
+				self.scanline_items.append(scanline)
+		self.toggle_scanlines(self.scanline_checkbox.isChecked())
 
-		if not self.current_image:
-			return
-
-		# TODO
-		# for coords in lines_data:
-		#     line = QLineF(*coords)
-		#     scanline = ClickableScanline(line)
-		#     scanline.clicked.connect(self.handle_scanline_clicked)
-		#     self.scene.addItem(scanline)
-		#     self.scanline_items.append(scanline)
 
 	def toggle_scanlines(self, show: bool):
 		"""Show or hide scanline overlays."""
@@ -318,8 +316,8 @@ class BarcodeReaderUI(QMainWindow):
 		if not file_path: return
 		logging.info(f"Loading image from file: {os.path.basename(file_path)}")
 		pixmap = QPixmap(file_path)
-		self.image_loaded.emit(file_path, pixmap)
 		self.main_image_view.set_image(pixmap)
+		self.image_loaded.emit(file_path, pixmap)
 
 	def toggle_camera_capture(self):
 		if self.cameraInput.started():

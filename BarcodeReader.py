@@ -58,6 +58,7 @@ class Images:
 	lineReads: LineReads = None
 	linesImg: ColorImage = None
 
+	scanlineEndpoints: np.ndarray[np.int64] = None
 	lines: list[list[tuple[Bars, Spans]]] = None
 	digits: Digits = None
 	detectionCounts: npt.NDArray[np.int64] = None
@@ -143,7 +144,7 @@ def genDrawLines(starts, ends, images: Images) -> tuple[list[list[Point]], int]:
 			cv2.line(images.linesImg, start[::-1], end[::-1], tuple(map(int, color)))
 	return linePs, maxLen
 
-def getScanlineEndpoints(shape: tuple) -> tuple:
+def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
 	angles = np.linspace(0, np.pi / 2, NUM_GRADIENTS)
 	gradVecs = np.column_stack((np.sin(angles), np.cos(angles)))
 	# first ^ over y axis, then > on x axis
@@ -160,9 +161,11 @@ def getScanlineEndpoints(shape: tuple) -> tuple:
 	scales = np.min(scales, axis=-1)
 	startPoints = np.tile(startPoints, (len(gradVecs), 1, 1))
 	endPoints = startPoints + scales[..., np.newaxis] * gradVecs[:, np.newaxis]
-	return startPoints, endPoints.astype('int')
+	endPoints = endPoints.astype('int')
+	images.scanlineEndpoints = np.concatenate((startPoints, endPoints), axis=-1)
+	return startPoints, endPoints
 def getScanLines(images: Images) -> LineReads:
-	startPoints, endPoints = getScanlineEndpoints(images.lightness.shape)
+	startPoints, endPoints = getScanlineEndpoints(images.lightness.shape, images)
 	linePs, maxLen = genDrawLines(startPoints, endPoints, images)
 
 	images.lineReads = np.zeros((len(linePs), len(linePs[0]), maxLen))
