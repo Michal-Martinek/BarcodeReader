@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 if getattr(sys, 'frozen', False):
-    os.chdir(os.path.dirname(sys.executable))
+	os.chdir(os.path.dirname(sys.executable))
 else:
-    os.chdir(os.path.dirname(__file__))
+	os.chdir(os.path.dirname(__file__))
 
 # parameters -----------------------------------
 NUM_AVERAGING_CHUNKS = (6, 6)
@@ -287,7 +287,7 @@ def decodeDigits(span: Spans, digitGroups: Groups, *, _flipped=False) -> Digits:
 	if parity[0, 0] == 0 and not _flipped: # NOTE read backwards
 		return decodeDigits(span, digitGroups[::-1, ::-1], _flipped=True)
 	check(np.all(parity[1] == 0), 'R-encoding expected in right half')
-	
+
 	firstDigit = FIRST_DIGIT_ENCODING.get(tuple(parity[0]), 0)
 	digits = np.concat(((firstDigit,), digits), axis=0)
 	return digits
@@ -372,7 +372,7 @@ def processImg(img: ColorImage, num: int) -> Images:
 	if digits.size:
 		l = [f'{d} {c}x' for d, c in zip(images.digits, images.detectionCounts)]
 		logging.info(f'{num:>03} detected: {"\t".join(l)}')
-	drawDebugs(images)
+	# drawDebugs(images)
 	return images
 
 def showStatistics(detected: npt.NDArray[np.int64]):
