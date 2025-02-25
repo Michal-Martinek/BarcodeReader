@@ -299,6 +299,7 @@ class BarcodeReaderUI(QMainWindow):
 
 		# Connect the debug ribbon signal so that clicking a debug image shows it in the main view.
 		self.debug_ribbon.debug_image_selected.connect(self.display_debug_image)
+		self.debugImgName = 'Original'
 
 		self.cameraInput = CameraInput(signal=self.image_loaded)
 
@@ -324,11 +325,13 @@ class BarcodeReaderUI(QMainWindow):
 			self.cameraInput.end()
 		else:
 			self.cameraInput.start()
+			self.main_image_view.reset_zoom()
 
 	def display_debug_image(self, name: str, pixmap: QPixmap):
 		"""
 		Display a debug image (selected from the debug ribbon) in the main image view.
 		"""
+		self.debugImgName = name
 		self.main_image_view.set_image(pixmap)
 
 	def add_debug_images(self, debug_images: dict):

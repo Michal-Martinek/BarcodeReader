@@ -28,10 +28,11 @@ class BarcodeProcessor:
 		detected = self.detect_barcode(pixmap, image_path)
 		debug_images = self.generate_debug_images()
 
-		self.ui.main_image_view.reset_zoom()
+		notCamera = 'Camera input' not in image_path
+		if notCamera: self.ui.main_image_view.reset_zoom()
 		# Update the UI:
 		# 1. Set the main image in the center.
-		self.ui.main_image_view.set_image(pixmap)
+		self.ui.main_image_view.set_image(debug_images[self.ui.debugImgName])
 		# 2. Add scanlines overlay on the main image.
 		self.ui.main_image_view.add_scanlines(self.images.scanlineEndpoints[..., ::-1])
 		# 3. Populate the debug ribbon on the right.
