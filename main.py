@@ -9,7 +9,10 @@ from PyQt6.QtGui import QPixmap, QImage
 from BarcodeReader import Digits, processImg, chooseDetection
 from ui import BarcodeReaderUI, numpy2Pixmap, pixmap2Numpy
 
-os.chdir(os.path.dirname(__file__))
+if getattr(sys, 'frozen', False):
+	os.chdir(os.path.dirname(sys.executable))
+else:
+	os.chdir(os.path.dirname(__file__))
 
 class BarcodeProcessor:
 	def __init__(self, ui: BarcodeReaderUI):
