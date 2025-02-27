@@ -38,20 +38,23 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 # Clickable Scanline
 # -------------------------
 class ClickableScanline(QGraphicsLineItem, QObject):
-	clicked = pyqtSignal(object)  # Emits self when clicked
+	# clicked = pyqtSignal(object)  # Emits self when clicked
 
-	def __init__(self, line: QLineF, color: QColor, *, parent=None):
+	def __init__(self, line: QLineF, color: QColor, clikedSignal: pyqtSignal, *, parent=None):
 		QObject.__init__(self)
 		QGraphicsLineItem.__init__(self, line, parent)
 		self.setAcceptHoverEvents(True)
 		self.default_pen = QPen(color, 1)
-		self.highlight_pen = QPen(Qt.GlobalColor.green, 2)
+		self.highlight_pen = QPen(color, 2)
 		self.setPen(self.default_pen)
+		self.clikedSignal = clikedSignal
 
 	def mousePressEvent(self, event):
-		# self.setPen(self.highlight_pen)
-		# self.clicked.emit(self)
+		self.setPen(self.highlight_pen)
+		self.clikedSignal.emit(self)
 		super().mousePressEvent(event)
+	def detailExit(self):
+		self.setPen(self.default_pen)
 
 	def hoverEnterEvent(self, event):
 		self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -65,6 +68,8 @@ class ClickableScanline(QGraphicsLineItem, QObject):
 # Main Image Display Widget
 # -------------------------
 class MainImageView(QWidget):
+	scanline_clicked = pyqtSignal(ClickableScanline)
+
 	def __init__(self):
 		super().__init__()
 		# QGraphicsScene & QGraphicsView allow overlaying scanlines on an image.
@@ -83,6 +88,7 @@ class MainImageView(QWidget):
 		controls_layout.addWidget(self.save_button)
 		controls_layout.addWidget(self.zoom_reset_button)
 		controls_layout.addWidget(self.scanline_checkbox)
+		# self.scanline_checkbox.toggle()
 		controls_layout.addStretch()
 
 		layout = QVBoxLayout(self)
@@ -92,6 +98,8 @@ class MainImageView(QWidget):
 		self.pixmap_item = None  # Holds the main image
 		self.scanline_items = []  # List of overlay scanline items
 		self.scanline_items_data = []  # Stores scanline coordinates
+		self.scanline_clicked.connect(self.handle_scanline_clicked)	
+		self.scanlineInspected: ClickableScanline = None
 		self.current_image = None  # Currently displayed QPixmap
 		self.zoom_factor = 1.0
 		self.view.wheelEvent = self.handle_wheel_zoom
@@ -127,8 +135,7 @@ class MainImageView(QWidget):
 		for grad, color in zip(lines_data, genColorsHUE(NUM_GRADIENTS)):
 			for coords in grad:
 				line = QLineF(*coords)
-				scanline = ClickableScanline(line, QColor(*color))
-				# scanline.clicked.connect(self.handle_scanline_clicked)
+				scanline = ClickableScanline(line, QColor(*color), self.scanline_clicked)
 				self.scene.addItem(scanline)
 				self.scanline_items.append(scanline)
 		self.toggle_scanlines(self.scanline_checkbox.isChecked())
@@ -139,8 +146,7 @@ class MainImageView(QWidget):
 		for item in self.scanline_items:
 			item.setVisible(show)
 
-	def handle_scanline_clicked(self, scanline):
-		"""Handle a scanline click by opening a details popup."""
+	def renderScanlineDetails(self, scanline: ClickableScanline) -> QDialog:
 		dialog = QDialog(self)
 		dialog.setWindowTitle("Scanline Details")
 		layout = QVBoxLayout(dialog)
@@ -149,7 +155,20 @@ class MainImageView(QWidget):
 		buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
 		buttons.accepted.connect(dialog.accept)
 		layout.addWidget(buttons)
-		dialog.exec()
+		return dialog
+	def handle_scanline_clicked(self, scanline: ClickableScanline):
+		"""Handle a scanline click by opening a details popup."""
+		if self.scanlineInspected: return scanline.detailExit()
+		self.scanlineInspected = scanline
+		dialog = self.renderScanlineDetails(scanline)
+		dialog.setModal(False)
+		dialog.show()
+		dialog.finished.connect(self.scanline_dialog_exit)
+	def scanline_dialog_exit(self):
+		try:
+			self.scanlineInspected.detailExit()
+		except RuntimeError: pass # scanline is deleted after changing debug img
+		self.scanlineInspected = None
 
 	def handle_wheel_zoom(self, event):
 		factor = 1.2 if event.angleDelta().y() > 0 else 0.8

@@ -56,7 +56,7 @@ class BarcodeProcessor:
 		return {
 			'Original': numpy2Pixmap(self.images.inputImg),
 			'Lightness': numpy2Pixmap(self.images.lightness),
-			'Black & white': numpy2Pixmap(self.images.BaW),
+			'Black or white': numpy2Pixmap(self.images.BaW),
 			# 'lineReads': numpy2Pixmap(self.images.lineReads),
 			'Average lightness': numpy2Pixmap(self.images.avgLightness),
 		}
