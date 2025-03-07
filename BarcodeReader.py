@@ -347,7 +347,8 @@ def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
 	fourths = 2 * (color[2] != 0) + 1
 	off = quietzoneEdge['start'] + (quietzoneEdge['len'] / 4 * fourths).astype('int')
 	lineSlice[off : off + basewidth] = color
-def drawSpans(img: ColorImage, images: Images):
+def drawSpans(images: Images) -> ColorImage:
+	img = toImg(images.lineReads > 0.)
 	for grad in images.lines:
 		for bars, spans in grad:
 			for span in spans:
@@ -356,6 +357,7 @@ def drawSpans(img: ColorImage, images: Images):
 				colorcodeQuietzone(lineSlice, span['moduleWidth'].astype('int'), startEdge)
 				endEdge = bars[span['end']]
 				colorcodeQuietzone(lineSlice, span['moduleWidth'].astype('int'), endEdge, (0, 255, 0))
+	return img
 def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, grads:int=1):
 	if lightness: cv2.imshow('lightness', toImg(images.lightness))
 	if localAverages: cv2.imshow('localAverages', toImg(images.localAverages))
@@ -363,8 +365,7 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 	cv2.imshow('linesImg', images.linesImg)
 
 	if grads:
-		lineReadImgs = toImg(images.lineReads > 0.)
-		drawSpans(lineReadImgs, images)
+		lineReadImgs = drawSpans(images)
 		drawGradLineReads(lineReadImgs, grads == 1)
 
 # IO --------------------------------------------------

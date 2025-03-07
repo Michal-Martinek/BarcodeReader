@@ -2,6 +2,8 @@ import logging
 import os
 import random
 import sys
+from copy import deepcopy
+
 import cv2
 import numpy as np
 from PyQt6 import QtCore
@@ -13,7 +15,7 @@ from PyQt6.QtWidgets import (
 	QDialog, QDialogButtonBox, QGraphicsLineItem, QSizePolicy
 )
 
-from BarcodeReader import NUM_GRADIENTS, genColorsHUE
+from BarcodeReader import NUM_GRADIENTS, Images, Line, detectLine, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -40,13 +42,15 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 class ClickableScanline(QGraphicsLineItem, QObject):
 	# clicked = pyqtSignal(object)  # Emits self when clicked
 
-	def __init__(self, line: QLineF, color: QColor, clikedSignal: pyqtSignal, *, parent=None):
+	def __init__(self, line: QLineF, index: tuple, color: QColor, clikedSignal: pyqtSignal, *, parent=None):
 		QObject.__init__(self)
 		QGraphicsLineItem.__init__(self, line, parent)
 		self.setAcceptHoverEvents(True)
 		self.default_pen = QPen(color, 1)
 		self.highlight_pen = QPen(color, 2)
+		self.hover_pen = QPen(QColor(255, 0, 0), 1)
 		self.setPen(self.default_pen)
+		self.index = index
 		self.clikedSignal = clikedSignal
 
 	def mousePressEvent(self, event):
@@ -58,10 +62,14 @@ class ClickableScanline(QGraphicsLineItem, QObject):
 
 	def hoverEnterEvent(self, event):
 		self.setCursor(Qt.CursorShape.PointingHandCursor)
+		if self.pen() == self.default_pen:
+			self.setPen(self.hover_pen)
 		super().hoverEnterEvent(event)
 
 	def hoverLeaveEvent(self, event):
 		self.unsetCursor()
+		if self.pen() == self.hover_pen:
+			self.setPen(self.default_pen)
 		super().hoverLeaveEvent(event)
 
 # -------------------------
@@ -72,6 +80,7 @@ class MainImageView(QWidget):
 
 	def __init__(self):
 		super().__init__()
+
 		# QGraphicsScene & QGraphicsView allow overlaying scanlines on an image.
 		self.scene = QGraphicsScene(self)
 		self.view = QGraphicsView(self.scene, self)
@@ -99,7 +108,7 @@ class MainImageView(QWidget):
 		self.scanline_items = []  # List of overlay scanline items
 		self.scanline_items_data = []  # Stores scanline coordinates
 		self.scanline_clicked.connect(self.handle_scanline_clicked)	
-		self.scanlineInspected: ClickableScanline = None
+		self.currDialog: tuple[ClickableScanline, QDialog] = None
 		self.current_image = None  # Currently displayed QPixmap
 		self.zoom_factor = 1.0
 		self.view.wheelEvent = self.handle_wheel_zoom
@@ -107,6 +116,8 @@ class MainImageView(QWidget):
 		self.zoom_reset_button.clicked.connect(self.reset_zoom)
 		self.save_button.clicked.connect(self.save_current_image)
 		self.scanline_checkbox.toggled.connect(self.toggle_scanlines)
+
+		self.images: Images = None
 
 	def show_placeholder(self):
 		"""Show a default project description when no image is loaded."""
@@ -132,10 +143,10 @@ class MainImageView(QWidget):
 		self.scanline_items_data = lines_data
 		self.scanline_items.clear()
 		assert self.current_image
-		for grad, color in zip(lines_data, genColorsHUE(NUM_GRADIENTS)):
-			for coords in grad:
+		for gradIdx, (grad, color) in enumerate(zip(lines_data, genColorsHUE(NUM_GRADIENTS))):
+			for lineIdx, coords in enumerate(grad):
 				line = QLineF(*coords)
-				scanline = ClickableScanline(line, QColor(*color), self.scanline_clicked)
+				scanline = ClickableScanline(line, (gradIdx, lineIdx), QColor(*color), self.scanline_clicked)
 				self.scene.addItem(scanline)
 				self.scanline_items.append(scanline)
 		self.toggle_scanlines(self.scanline_checkbox.isChecked())
@@ -145,30 +156,56 @@ class MainImageView(QWidget):
 		"""Show or hide scanline overlays."""
 		for item in self.scanline_items:
 			item.setVisible(show)
-
+	def closeDialog(self):
+		if self.currDialog:
+			# return scanline.detailExit()
+			self.currDialog[1].close()
+	def getScanlineDesc(self, scanline: ClickableScanline, reads: Line) -> str:
+		endpoints = self.images.scanlineEndpoints[scanline.index].reshape((2, 2))
+		endpointsReadable = list(map(lambda p: tuple(map(int, p)), endpoints))
+		len = int(np.sum((endpoints[0] - endpoints[1]) ** 2) ** 0.5)
+		detections = detectLine(*scanline.index, deepcopy(self.images), reads)
+		if detections:
+			split = lambda s: ' '.join((s[0], s[1:7], s[7:]))
+			detections = ', '.join([split(''.join(map(str, d))) for d in detections])
+		text = f"""
+	Endpoints: {endpointsReadable}, length: {len}
+	Detections: {detections}
+	"""
+		return text
 	def renderScanlineDetails(self, scanline: ClickableScanline) -> QDialog:
 		dialog = QDialog(self)
-		dialog.setWindowTitle("Scanline Details")
+		dialog.setWindowTitle(f"Scanline details: grad={scanline.index[0]}, index={scanline.index[1]}")
 		layout = QVBoxLayout(dialog)
-		info_label = QLabel("Detailed scanline info goes here.\nTODO: Implement actual details.")
+		text = self.getScanlineDesc(scanline, self.images.lineReads[scanline.index])
+		info_label = QLabel(text)
 		layout.addWidget(info_label)
-		buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-		buttons.accepted.connect(dialog.accept)
-		layout.addWidget(buttons)
+
+		assert self.images
+		image_label = QLabel()
+		lineRead = drawSpans(self.images)[scanline.index]
+		readsImg = np.repeat(lineRead[np.newaxis], 100, axis=0)
+		image_label.setPixmap(numpy2Pixmap(readsImg))
+		layout.addWidget(image_label)
+
+		# buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+		# buttons.accepted.connect(dialog.accept)
+		# layout.addWidget(buttons)
 		return dialog
 	def handle_scanline_clicked(self, scanline: ClickableScanline):
 		"""Handle a scanline click by opening a details popup."""
-		if self.scanlineInspected: return scanline.detailExit()
-		self.scanlineInspected = scanline
+		self.closeDialog()
 		dialog = self.renderScanlineDetails(scanline)
 		dialog.setModal(False)
 		dialog.show()
-		dialog.finished.connect(self.scanline_dialog_exit)
-	def scanline_dialog_exit(self):
+		dialog.finished.connect(lambda: self.scanline_dialog_exit(scanline))
+		self.currDialog = scanline, dialog
+	def scanline_dialog_exit(self, scanline: ClickableScanline):
 		try:
-			self.scanlineInspected.detailExit()
+			scanline.detailExit()
 		except RuntimeError: pass # scanline is deleted after changing debug img
-		self.scanlineInspected = None
+		if scanline == self.currDialog[0]:
+			self.currDialog = None
 
 	def handle_wheel_zoom(self, event):
 		factor = 1.2 if event.angleDelta().y() > 0 else 0.8
@@ -332,6 +369,7 @@ class BarcodeReaderUI(QMainWindow):
 	def load_image_from_file(self, file=None):
 		"""Open a file dialog and load an image from disk."""
 		self.cameraInput.end()
+		self.main_image_view.closeDialog()
 		file_path = file or QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")[0]
 		if not file_path: return
 		logging.info(f"Loading image from file: {os.path.basename(file_path)}")
@@ -343,6 +381,7 @@ class BarcodeReaderUI(QMainWindow):
 		if self.cameraInput.started():
 			self.cameraInput.end()
 		else:
+			self.main_image_view.closeDialog()
 			self.cameraInput.start()
 			self.main_image_view.reset_zoom()
 

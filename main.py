@@ -52,7 +52,7 @@ class BarcodeProcessor:
 		return read
 
 	def generate_debug_images(self) -> dict:
-		# For demonstration, we'll use the same pixmap for all debug images.
+		self.ui.main_image_view.images = self.images
 		return {
 			'Original': numpy2Pixmap(self.images.inputImg),
 			'Lightness': numpy2Pixmap(self.images.lightness),
