@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 	QDialog, QDialogButtonBox, QGraphicsLineItem, QSizePolicy
 )
 
-from BarcodeReader import NUM_GRADIENTS, Images, Line, detectLine, drawSpans, genColorsHUE
+from BarcodeReader import NUM_GRADIENTS, ColorImage, Images, Line, detectLine, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -173,6 +173,14 @@ class MainImageView(QWidget):
 	Detections: {detections}
 	"""
 		return text
+	def renderHistogram(self, scanline: ClickableScanline) -> ColorImage:
+		uniq, counts = np.unique(toImg(self.images.lineReads)[scanline.index], return_counts=True)
+		# counts = np.cumulative_sum(counts)
+		lightnessScale = np.arange(256, dtype='uint8')[:, np.newaxis, np.newaxis]
+		img = np.tile(lightnessScale, (1, counts.max() + 20, 3))
+		for lightness, count in zip(uniq, counts):
+			img[lightness, :count] = (0, 255, 0)
+		return img
 	def renderScanlineDetails(self, scanline: ClickableScanline) -> QDialog:
 		dialog = QDialog(self)
 		dialog.setWindowTitle(f"Scanline details: grad={scanline.index[0]}, index={scanline.index[1]}")
@@ -186,6 +194,13 @@ class MainImageView(QWidget):
 		lineRead = drawSpans(self.images)[scanline.index]
 		readsImg = np.repeat(lineRead[np.newaxis], 100, axis=0)
 		image_label.setPixmap(numpy2Pixmap(readsImg))
+		layout.addWidget(image_label)
+
+		label = QLabel('\n\tLightness histogram\n')
+		layout.addWidget(label)
+		histogram = self.renderHistogram(scanline)
+		image_label = QLabel()
+		image_label.setPixmap(numpy2Pixmap(histogram))
 		layout.addWidget(image_label)
 
 		# buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
