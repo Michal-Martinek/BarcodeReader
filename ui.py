@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 	QDialog, QDialogButtonBox, QGraphicsLineItem, QSlider
 )
 
+import BarcodeReader
 from BarcodeReader import NUM_GRADIENTS, ColorImage, Images, Line, detectLine, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
@@ -78,7 +79,7 @@ class ClickableScanline(QGraphicsLineItem, QObject):
 class MainImageView(QWidget):
 	scanline_clicked = pyqtSignal(ClickableScanline)
 
-	def __init__(self):
+	def __init__(self, image_loaded_signal: pyqtSignal):
 		super().__init__()
 
 		# QGraphicsScene & QGraphicsView allow overlaying scanlines on an image.
@@ -101,13 +102,15 @@ class MainImageView(QWidget):
 
 		# Scanline distance controls
 		self.distance_label = QLabel("Scanline distance:")
-		self.distance_value_label = QLabel(str(40)) # TODO
+		self.distance_value_label = QLabel(str(BarcodeReader.SCANLINE_DIST))
 		self.distance_slider = QSlider(Qt.Orientation.Horizontal)
-		self.distance_slider.setMinimum(2)
+		self.distance_slider.setMinimum(5)
 		self.distance_slider.setMaximum(100)
-		self.distance_slider.setValue(40)
-		self.distance_slider.setTickInterval(2)
+		self.distance_slider.setValue(BarcodeReader.SCANLINE_DIST)
+		self.distance_slider.setTickInterval(5)
 		self.distance_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+		self.distance_slider.valueChanged.connect(self.scanline_dist_changed)
+		self.image_loaded_signal = image_loaded_signal
 
 		# Layout for distance constrols
 		self.distance_layout = QHBoxLayout()
@@ -156,6 +159,13 @@ class MainImageView(QWidget):
 		self.scene.setSceneRect(*pixmap.rect().getCoords())
 		# self.reset_zoom()
 		self.render_scanlines()
+
+	def scanline_dist_changed(self):
+		value = self.distance_slider.value()
+		BarcodeReader.SCANLINE_DIST = int(value)
+		print(BarcodeReader.SCANLINE_DIST)
+		self.distance_value_label.setText(str(value))
+		self.image_loaded_signal.emit('scanline-dist-resize', self.current_image)
 
 	def add_scanlines(self, lines_data):
 		"""
@@ -393,7 +403,7 @@ class BarcodeReaderUI(QMainWindow):
 		content_layout = QHBoxLayout()
 		main_layout.addLayout(content_layout)
 
-		self.main_image_view = MainImageView()
+		self.main_image_view = MainImageView(self.image_loaded)
 		self.main_image_view.show_placeholder()  # Shows a project description when no image is loaded.
 		content_layout.addWidget(self.main_image_view, stretch=3)
 
