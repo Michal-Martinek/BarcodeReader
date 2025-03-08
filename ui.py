@@ -133,7 +133,7 @@ class MainImageView(QWidget):
 		self.pixmap_item = self.scene.addPixmap(pixmap)
 		self.scene.setSceneRect(*pixmap.rect().getCoords())
 		# self.reset_zoom()
-		self.add_scanlines(self.scanline_items_data)
+		self.render_scanlines()
 
 	def add_scanlines(self, lines_data):
 		"""
@@ -142,8 +142,10 @@ class MainImageView(QWidget):
 		"""
 		self.scanline_items_data = lines_data
 		self.scanline_items.clear()
+	def render_scanlines(self):
+		self.scanline_items.clear()
 		assert self.current_image
-		for gradIdx, (grad, color) in enumerate(zip(lines_data, genColorsHUE(NUM_GRADIENTS))):
+		for gradIdx, (grad, color) in enumerate(zip(self.scanline_items_data, genColorsHUE(NUM_GRADIENTS))):
 			for lineIdx, coords in enumerate(grad):
 				line = QLineF(*coords)
 				scanline = ClickableScanline(line, (gradIdx, lineIdx), QColor(*color), self.scanline_clicked)
@@ -174,11 +176,11 @@ class MainImageView(QWidget):
 	"""
 		return text
 	def renderHistogram(self, scanline: ClickableScanline) -> ColorImage:
-		uniq, counts = np.unique(toImg(self.images.lineReads)[scanline.index], return_counts=True)
+		uniq, counts = np.unique(self.images.lineReads[scanline.index], return_counts=True)
 		# counts = np.cumulative_sum(counts)
 		lightnessScale = np.arange(256, dtype='uint8')[:, np.newaxis, np.newaxis]
 		img = np.tile(lightnessScale, (1, counts.max() + 20, 3))
-		for lightness, count in zip(uniq, counts):
+		for lightness, count in zip((uniq * 256).astype('uint8'), counts):
 			img[lightness, :count] = (0, 255, 0)
 		return img
 	def renderScanlineDetails(self, scanline: ClickableScanline) -> QDialog:

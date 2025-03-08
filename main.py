@@ -34,10 +34,10 @@ class BarcodeProcessor:
 		notCamera = 'Camera input' not in image_path
 		if notCamera: self.ui.main_image_view.reset_zoom()
 		# Update the UI:
-		# 1. Set the main image in the center.
-		self.ui.main_image_view.set_image(debug_images[self.ui.debugImgName])
 		# 2. Add scanlines overlay on the main image.
 		self.ui.main_image_view.add_scanlines(self.images.scanlineEndpoints[..., ::-1])
+		# 1. Set the main image in the center.
+		self.ui.main_image_view.set_image(debug_images[self.ui.debugImgName])
 		# 3. Populate the debug ribbon on the right.
 		self.ui.add_debug_images(debug_images)
 		# Update the detection result label.
