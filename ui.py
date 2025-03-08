@@ -12,7 +12,7 @@ from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QIcon, QColor
 from PyQt6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
 	QLabel, QFileDialog, QGraphicsView, QGraphicsScene, QScrollArea, QCheckBox,
-	QDialog, QDialogButtonBox, QGraphicsLineItem, QSizePolicy
+	QDialog, QDialogButtonBox, QGraphicsLineItem, QSlider
 )
 
 from BarcodeReader import NUM_GRADIENTS, ColorImage, Images, Line, detectLine, drawSpans, genColorsHUE
@@ -88,21 +88,43 @@ class MainImageView(QWidget):
 		self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 		self.view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
-		# Control buttons
+		# Main control buttons layout
 		self.save_button = QPushButton("Save Image")
 		self.zoom_reset_button = QPushButton("Reset Zoom")
 		self.scanline_checkbox = QCheckBox("Show Scanlines")
+		self.scanline_checkbox.toggle()
 
 		controls_layout = QHBoxLayout()
 		controls_layout.addWidget(self.save_button)
 		controls_layout.addWidget(self.zoom_reset_button)
 		controls_layout.addWidget(self.scanline_checkbox)
-		# self.scanline_checkbox.toggle()
-		controls_layout.addStretch()
+
+		# Scanline distance controls
+		self.distance_label = QLabel("Scanline distance:")
+		self.distance_value_label = QLabel(str(40)) # TODO
+		self.distance_slider = QSlider(Qt.Orientation.Horizontal)
+		self.distance_slider.setMinimum(2)
+		self.distance_slider.setMaximum(100)
+		self.distance_slider.setValue(40)
+		self.distance_slider.setTickInterval(2)
+		self.distance_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+
+		# Layout for distance constrols
+		self.distance_layout = QHBoxLayout()
+		self.distance_layout.addWidget(self.distance_label)
+		self.distance_layout.addWidget(self.distance_value_label)
+		self.distance_layout.addWidget(self.distance_slider)
+
+		# Combine all layouts
+		self.bottom_layout = QHBoxLayout()
+		self.bottom_layout.addLayout(controls_layout)
+		self.bottom_layout.addLayout(self.distance_layout)
+
+		self.set_distance_visibility(self.scanline_checkbox.isChecked())
 
 		layout = QVBoxLayout(self)
 		layout.addWidget(self.view)
-		layout.addLayout(controls_layout)
+		layout.addLayout(self.bottom_layout)
 
 		self.pixmap_item = None  # Holds the main image
 		self.scanline_items = []  # List of overlay scanline items
@@ -153,11 +175,22 @@ class MainImageView(QWidget):
 				self.scanline_items.append(scanline)
 		self.toggle_scanlines(self.scanline_checkbox.isChecked())
 
-
+	def set_distance_visibility(self, show: bool):
+		self.distance_label.setVisible(show)
+		self.distance_value_label.setVisible(show)
+		self.distance_slider.setVisible(show)
+		if not show:
+			return self.bottom_layout.addStretch()
+		while True: # remove all stretches at the end
+			stretch = self.bottom_layout.takeAt(self.distance_layout.count() - 1)
+			if not stretch or not stretch.spacerItem(): break
+			self.bottom_layout.removeItem(stretch)
 	def toggle_scanlines(self, show: bool):
 		"""Show or hide scanline overlays."""
 		for item in self.scanline_items:
 			item.setVisible(show)
+		self.set_distance_visibility(show)
+		
 	def closeDialog(self):
 		if self.currDialog:
 			# return scanline.detailExit()
