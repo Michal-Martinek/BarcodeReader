@@ -132,7 +132,7 @@ class MainImageView(QWidget):
 		self.pixmap_item = None  # Holds the main image
 		self.scanline_items = []  # List of overlay scanline items
 		self.scanline_items_data = []  # Stores scanline coordinates
-		self.scanline_clicked.connect(self.handle_scanline_clicked)	
+		self.scanline_clicked.connect(self.handle_scanline_clicked)
 		self.currDialog: tuple[ClickableScanline, QDialog] = None
 		self.current_image = None  # Currently displayed QPixmap
 		self.zoom_factor = 1.0
@@ -163,7 +163,6 @@ class MainImageView(QWidget):
 	def scanline_dist_changed(self):
 		value = self.distance_slider.value()
 		BarcodeReader.SCANLINE_DIST = int(value)
-		print(BarcodeReader.SCANLINE_DIST)
 		self.distance_value_label.setText(str(value))
 		self.image_loaded_signal.emit('scanline-dist-resize', self.current_image)
 
@@ -200,7 +199,7 @@ class MainImageView(QWidget):
 		for item in self.scanline_items:
 			item.setVisible(show)
 		self.set_distance_visibility(show)
-		
+
 	def closeDialog(self):
 		if self.currDialog:
 			# return scanline.detailExit()
@@ -350,6 +349,47 @@ class CameraInput:
 			return logging.error('camera input unavailable')
 		self.signal.emit('Camera input', numpy2Pixmap(img))
 
+
+class DetectionLabel(QLabel):
+	textTemplate = 'Detected: {}'
+	def __init__(self, parent=None):
+		super().__init__('', parent)
+		self.default_color = 'white'
+		self.hover_color = 'dodgerblue'
+		self.setColor(self.default_color)
+		self.setCursor(Qt.CursorShape.PointingHandCursor)
+		self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		self.setDetected(None)
+	def setColor(self, color: str):
+		style = f"border: none; font-size: 20px; color: {color};"
+		self.setStyleSheet(style)
+
+	def stringifyText(self, detected: np.ndarray) -> str:
+		if isinstance(detected, np.ndarray) and detected.size:
+			return ''.join(map(str, detected))
+		return str(None)
+	def setDetected(self, detected: np.ndarray):
+		self.code = s = self.stringifyText(detected)
+		if len(s) == 13:
+			s = ' '.join((s[0], s[1:7], s[7:]))
+		self.setText(self.textTemplate.format(s))
+
+	def enterEvent(self, event):
+		"""Change text color when hovered"""
+		self.setColor(self.hover_color)
+		super().enterEvent(event)
+	def leaveEvent(self, event):
+		"""Revert text color when not hovered"""
+		self.setColor(self.default_color)
+		super().leaveEvent(event)
+	def mousePressEvent(self, event):
+		"""Copy text to clipboard when clicked"""
+		if event.button() == Qt.MouseButton.LeftButton:
+			if self.code != 'None':
+				QApplication.clipboard().setText(self.code)
+			self.setColor('red' if self.code == 'None' else 'lightgreen')
+		super().mousePressEvent(event)
+		
 # -------------------------
 # Main UI Window
 # -------------------------
@@ -390,14 +430,12 @@ class BarcodeReaderUI(QMainWindow):
 		self.btn_load_camera.clicked.connect(self.toggle_camera_capture)
 		input_layout.addWidget(self.btn_load_camera)
 
-		input_layout.addStretch()
-		main_layout.addLayout(input_layout)
+		self.detection_label = DetectionLabel()
+		input_layout.addStretch(1)
+		input_layout.addWidget(self.detection_label)
+		input_layout.addStretch(2)
 
-		# Detection result label.
-		self.detection_label = QLabel("Detection Result: None")
-		# self.detection_label.setMinimumSize(self.detection_label.width(), self.detection_label.height())
-		self.detection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-		main_layout.addWidget(self.detection_label)
+		main_layout.addLayout(input_layout)
 
 		# Main content: central image view and right-side debug ribbon.
 		content_layout = QHBoxLayout()
@@ -461,13 +499,3 @@ class BarcodeReaderUI(QMainWindow):
 		for name, pixmap in debug_images.items():
 			self.debug_ribbon.add_debug_image(name, pixmap)
 		# self.debug_images_generated.emit(debug_images)
-
-	def display_detection_result(self, detected: np.ndarray):
-		"""Update the detection result label."""
-		text = "Detection Result: None"
-		if detected.size:
-			assert detected.shape == (13,)
-			s = ''.join(map(str, detected))
-			s = ' '.join((s[0], s[1:7], s[7:]))
-			text = f"Detection Result: {s}"
-		self.detection_label.setText(text)

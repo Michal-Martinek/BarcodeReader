@@ -41,7 +41,7 @@ class BarcodeProcessor:
 		# 3. Populate the debug ribbon on the right.
 		self.ui.add_debug_images(debug_images)
 		# Update the detection result label.
-		self.ui.display_detection_result(detected)
+		self.ui.detection_label.setDetected(detected)
 		# 4. Emit the detected barcode (if you wish to hook it elsewhere)
 		# self.ui.barcode_detected.emit(barcode_text)
 		logging.debug(f"Barcode Detected: {detected}")
