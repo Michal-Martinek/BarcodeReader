@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtGui import QPixmap, QIcon
 
 from BarcodeReader import Digits, processImg
 from ui import BarcodeReaderUI, numpy2Pixmap, pixmap2Numpy
@@ -66,6 +66,7 @@ def main():
 	logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 
 	app = QApplication(sys.argv)
+	app.setWindowIcon(QIcon('BarcodeReader.ico'))
 	ui = BarcodeReaderUI()
 	processor = BarcodeProcessor(ui)
 	# Connect the UI's image_loaded signal to the processor's process_image method.

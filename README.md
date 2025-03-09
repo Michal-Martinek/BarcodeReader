@@ -7,7 +7,10 @@ You can read the propositions [here](https://github.com/Michal-Martinek/BarcodeR
   - [x] single window
   - [x] displaying of intermediate detection steps
   - [x] choosing image input - file, camera, dataset
-  - [ ] clickable scanlines for additional info
+  - [x] clickable scanlines for additional info
+    - lightness along scanline, detected spans, lightness histogram, detection results + checksum
+  - [x] slider for dynamically changing scanline distance
+  - [x] easy copying of detected code
 - [ ] using detected code (displaying product info)
 
 ## Setup
