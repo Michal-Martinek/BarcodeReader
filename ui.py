@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 import BarcodeReader
-from BarcodeReader import NUM_GRADIENTS, ColorImage, Digits, Images, Line, drawSpans, genColorsHUE
+from BarcodeReader import NUM_GRADIENTS, NUM_SKEW_GRADIENTS, ColorImage, Digits, Images, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -41,9 +41,7 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 # Clickable Scanline
 # -------------------------
 class ClickableScanline(QGraphicsLineItem, QObject):
-	# clicked = pyqtSignal(object)  # Emits self when clicked
-
-	def __init__(self, line: QLineF, index: tuple, color: QColor, detections: list[Digits], clikedSignal: pyqtSignal, *, parent=None):
+	def __init__(self, line: QLineF, index: tuple, color: QColor, detections: list[Digits], clickedSignal: pyqtSignal, *, parent=None):
 		QObject.__init__(self)
 		QGraphicsLineItem.__init__(self, line, parent)
 		self.setAcceptHoverEvents(True)
@@ -53,25 +51,36 @@ class ClickableScanline(QGraphicsLineItem, QObject):
 		self.setPen(self.default_pen)
 		self.index = index
 		self.detections = detections
-		self.clikedSignal = clikedSignal
+		self.opacityRatio = 1.
+		self.clickedSignal = clickedSignal
+	def hasDetections(self) -> bool:
+		return bool(self.detections and len(self.detections))
+	def show(self, visible, dimmBlank):
+		self.setVisible(visible)
+		self.opacityRatio = 1. if not dimmBlank or self.detections else 0.2
+		self.setOpacity(self.opacityRatio)
 
 	def mousePressEvent(self, event):
 		self.setPen(self.highlight_pen)
-		self.clikedSignal.emit(self)
+		self.setOpacity(1.)
+		self.clickedSignal.emit(self)
 		super().mousePressEvent(event)
 	def detailExit(self):
 		self.setPen(self.default_pen)
+		self.setOpacity(self.opacityRatio)
 
 	def hoverEnterEvent(self, event):
 		self.setCursor(Qt.CursorShape.PointingHandCursor)
 		if self.pen() == self.default_pen:
 			self.setPen(self.hover_pen)
+		self.setOpacity(1.)
 		super().hoverEnterEvent(event)
 
 	def hoverLeaveEvent(self, event):
 		self.unsetCursor()
 		if self.pen() == self.hover_pen:
 			self.setPen(self.default_pen)
+			self.setOpacity(self.opacityRatio)
 		super().hoverLeaveEvent(event)
 
 # -------------------------
@@ -131,7 +140,7 @@ class MainImageView(QWidget):
 		layout.addLayout(self.bottom_layout)
 
 		self.pixmap_item = None  # Holds the main image
-		self.scanlines = []  # List of overlay scanline items
+		self.scanlines: list[ClickableScanline] = []
 		self.scanline_clicked.connect(self.handle_scanline_clicked)
 		self.currDialog: tuple[ClickableScanline, QDialog] = None
 		self.current_image = None  # Currently displayed QPixmap
@@ -169,9 +178,11 @@ class MainImageView(QWidget):
 	def render_scanlines(self):
 		self.scanlines.clear()
 		assert self.current_image
-		endpoints = self.images.scanlineEndpoints[..., ::-1]
+		endpoints = self.images.scanlineEndpoints[..., (1, 0, 3, 2)] # y, x -> x, y
 		for gradIdx, (grad, color) in enumerate(zip(endpoints, genColorsHUE(NUM_GRADIENTS))):
 			for lineIdx, coords in enumerate(grad):
+				if gradIdx in [0, NUM_SKEW_GRADIENTS + 1] and np.any(coords[2:] == 0):
+					continue # ignore vertical / horizontal lines stacked at the edge of img
 				line = QLineF(*coords)
 				index = (gradIdx, lineIdx)
 				scanline = ClickableScanline(line, index, QColor(*color), self.images.lineDetections.get(index, None), self.scanline_clicked)
@@ -191,15 +202,15 @@ class MainImageView(QWidget):
 			self.bottom_layout.removeItem(stretch)
 	def toggle_scanlines(self, show: bool):
 		"""Show or hide scanline overlays."""
-		for item in self.scanlines:
-			item.setVisible(show)
+		for line in self.scanlines:
+			line.show(show, True)
 		self.set_distance_visibility(show)
 
 	def closeDialog(self):
 		if self.currDialog:
 			# return scanline.detailExit()
 			self.currDialog[1].close()
-	def getScanlineDesc(self, scanline: ClickableScanline, reads: Line) -> str:
+	def getScanlineDesc(self, scanline: ClickableScanline) -> str:
 		endpoints = self.images.scanlineEndpoints[scanline.index].reshape((2, 2))
 		endpointsReadable = list(map(lambda p: tuple(map(int, p)), endpoints))
 		len = int(np.sum((endpoints[0] - endpoints[1]) ** 2) ** 0.5)
@@ -223,7 +234,7 @@ class MainImageView(QWidget):
 		dialog = QDialog(self)
 		dialog.setWindowTitle(f"Scanline details: grad={scanline.index[0]}, index={scanline.index[1]}")
 		layout = QVBoxLayout(dialog)
-		text = self.getScanlineDesc(scanline, self.images.lineReads[scanline.index])
+		text = self.getScanlineDesc(scanline)
 		info_label = QLabel(text)
 		layout.addWidget(info_label)
 
