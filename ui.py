@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 import BarcodeReader
-from BarcodeReader import NUM_GRADIENTS, NUM_SKEW_GRADIENTS, ColorImage, Digits, Images, drawSpans, genColorsHUE
+from BarcodeReader import NUM_GRADIENTS, NUM_SKEW_GRADIENTS, ColorImage, Digits, Images, checksumDigit, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -47,7 +47,7 @@ class ClickableScanline(QGraphicsLineItem, QObject):
 		self.setAcceptHoverEvents(True)
 		self.default_pen = QPen(color, 1)
 		self.highlight_pen = QPen(color, 2)
-		self.hover_pen = QPen(QColor(255, 0, 0), 1)
+		self.hover_pen = QPen(QColor(255, 0, 0), 3)
 		self.setPen(self.default_pen)
 		self.index = index
 		self.detections = detections
@@ -210,13 +210,17 @@ class MainImageView(QWidget):
 		if self.currDialog:
 			# return scanline.detailExit()
 			self.currDialog[1].close()
+	def _prettyPrintDetection(self, d: Digits) -> str:
+		s = ''.join(map(str, d))
+		spaced = ' '.join((s[0], s[1:7], s[7:]))
+		spaced += ' ✔️' if checksumDigit(d) else ' ❌'
+		return spaced
 	def getScanlineDesc(self, scanline: ClickableScanline) -> str:
 		endpoints = self.images.scanlineEndpoints[scanline.index].reshape((2, 2))
 		endpointsReadable = list(map(lambda p: tuple(map(int, p)), endpoints))
 		len = int(np.sum((endpoints[0] - endpoints[1]) ** 2) ** 0.5)
 		if detections := scanline.detections:
-			split = lambda s: ' '.join((s[0], s[1:7], s[7:]))
-			detections = ', '.join([split(''.join(map(str, d))) for d in detections])
+			detections = ', '.join([self._prettyPrintDetection(d) for d in detections])
 		text = f"""
 	Endpoints: {endpointsReadable}, length: {len}
 	Detections: {detections}

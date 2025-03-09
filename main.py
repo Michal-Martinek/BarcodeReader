@@ -6,7 +6,7 @@ import cv2
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap, QImage
 
-from BarcodeReader import Digits, processImg, chooseDetection
+from BarcodeReader import Digits, processImg
 from ui import BarcodeReaderUI, numpy2Pixmap, pixmap2Numpy
 
 if getattr(sys, 'frozen', False):
@@ -46,8 +46,8 @@ class BarcodeProcessor:
 
 	def detect_barcode(self, pixmap: QPixmap, image_path) -> Digits:
 		self.images = processImg(pixmap2Numpy(pixmap), os.path.basename(image_path), pyqt=True)
-		read = chooseDetection(self.images, self.images.digits)
-		return read
+		if self.images.digits is None or self.images.digits.size == 0: return np.ndarray(0)
+		return self.images.digits[self.images.detectionCounts.argmax()]
 
 	def generate_debug_images(self) -> dict:
 		self.ui.main_image_view.images = self.images
