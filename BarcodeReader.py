@@ -17,7 +17,8 @@ else:
 NUM_AVERAGING_CHUNKS = (6, 6)
 
 SCANLINE_DIST = 40
-NUM_GRADIENTS = 2 + 3 # TODO count, rename
+NUM_SKEW_GRADIENTS = 3
+NUM_GRADIENTS = 2 * (NUM_SKEW_GRADIENTS + 1)
 MIN_QUIETZONE_WIDTH = 5
 NUM_BASEWIDTHS = 95 - 3
 NUM_EDGES = 4 * 12 + 5 + 3
@@ -145,7 +146,8 @@ def genDrawLines(starts, ends, images: Images) -> tuple[list[list[Point]], int]:
 	return linePs, maxLen
 
 def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
-	angles = np.linspace(0, np.pi / 2, NUM_GRADIENTS)
+	# NOTE first generate both orthogonal + all downward skewed gradients: -, \, |
+	angles = np.linspace(0, np.pi / 2, NUM_SKEW_GRADIENTS + 2)
 	gradVecs = np.column_stack((np.sin(angles), np.cos(angles)))
 	# first ^ over y axis, then > on x axis
 	startPsY = np.arange(SCANLINE_DIST, shape[0], SCANLINE_DIST)[::-1]
@@ -153,7 +155,6 @@ def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
 	startPoints = np.zeros((len(startPsY) + len(startPsX), 2), dtype='int')
 	startPoints[:len(startPsY), 0] = startPsY
 	startPoints[len(startPsY):, 1] = startPsX
-	# TODO from bottom
 
 	epsilon = 1e-10
 	edgeDist = (shape,) - startPoints
@@ -162,6 +163,10 @@ def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
 	startPoints = np.tile(startPoints, (len(gradVecs), 1, 1))
 	endPoints = startPoints + scales[..., np.newaxis] * gradVecs[:, np.newaxis]
 	endPoints = endPoints.astype('int')
+
+	# NOTE flip the skewed gradients vertically to get grads heading upwards
+	startPoints = np.concatenate((startPoints, (shape[0]-1, 0) + (-1, 1) * startPoints[1:-1]))
+	endPoints   = np.concatenate((endPoints,   (shape[0]-1, 0) + (-1, 1) * endPoints[1:-1]))
 	images.scanlineEndpoints = np.concatenate((startPoints, endPoints), axis=-1)
 	return startPoints, endPoints
 def getScanLines(images: Images) -> LineReads:
