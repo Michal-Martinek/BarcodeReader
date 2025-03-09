@@ -34,8 +34,6 @@ class BarcodeProcessor:
 		if image_path not in ['Camera input', 'scanline-dist-resize']:
 			self.ui.main_image_view.reset_zoom()
 		# Update the UI:
-		# 2. Add scanlines overlay on the main image.
-		self.ui.main_image_view.add_scanlines(self.images.scanlineEndpoints[..., ::-1])
 		# 1. Set the main image in the center.
 		self.ui.main_image_view.set_image(debug_images[self.ui.debugImgName])
 		# 3. Populate the debug ribbon on the right.

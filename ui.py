@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 import BarcodeReader
-from BarcodeReader import NUM_GRADIENTS, ColorImage, Images, Line, detectLine, drawSpans, genColorsHUE
+from BarcodeReader import NUM_GRADIENTS, ColorImage, Digits, Images, Line, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -43,7 +43,7 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 class ClickableScanline(QGraphicsLineItem, QObject):
 	# clicked = pyqtSignal(object)  # Emits self when clicked
 
-	def __init__(self, line: QLineF, index: tuple, color: QColor, clikedSignal: pyqtSignal, *, parent=None):
+	def __init__(self, line: QLineF, index: tuple, color: QColor, detections: list[Digits], clikedSignal: pyqtSignal, *, parent=None):
 		QObject.__init__(self)
 		QGraphicsLineItem.__init__(self, line, parent)
 		self.setAcceptHoverEvents(True)
@@ -52,6 +52,7 @@ class ClickableScanline(QGraphicsLineItem, QObject):
 		self.hover_pen = QPen(QColor(255, 0, 0), 1)
 		self.setPen(self.default_pen)
 		self.index = index
+		self.detections = detections
 		self.clikedSignal = clikedSignal
 
 	def mousePressEvent(self, event):
@@ -130,8 +131,7 @@ class MainImageView(QWidget):
 		layout.addLayout(self.bottom_layout)
 
 		self.pixmap_item = None  # Holds the main image
-		self.scanline_items = []  # List of overlay scanline items
-		self.scanline_items_data = []  # Stores scanline coordinates
+		self.scanlines = []  # List of overlay scanline items
 		self.scanline_clicked.connect(self.handle_scanline_clicked)
 		self.currDialog: tuple[ClickableScanline, QDialog] = None
 		self.current_image = None  # Currently displayed QPixmap
@@ -166,22 +166,17 @@ class MainImageView(QWidget):
 		self.distance_value_label.setText(str(value))
 		self.image_loaded_signal.emit('scanline-dist-resize', self.current_image)
 
-	def add_scanlines(self, lines_data):
-		"""
-		Overlay scanlines on the image.
-		lines_data: list of tuples (x1, y1, x2, y2)
-		"""
-		self.scanline_items_data = lines_data
-		self.scanline_items.clear()
 	def render_scanlines(self):
-		self.scanline_items.clear()
+		self.scanlines.clear()
 		assert self.current_image
-		for gradIdx, (grad, color) in enumerate(zip(self.scanline_items_data, genColorsHUE(NUM_GRADIENTS))):
+		endpoints = self.images.scanlineEndpoints[..., ::-1]
+		for gradIdx, (grad, color) in enumerate(zip(endpoints, genColorsHUE(NUM_GRADIENTS))):
 			for lineIdx, coords in enumerate(grad):
 				line = QLineF(*coords)
-				scanline = ClickableScanline(line, (gradIdx, lineIdx), QColor(*color), self.scanline_clicked)
+				index = (gradIdx, lineIdx)
+				scanline = ClickableScanline(line, index, QColor(*color), self.images.lineDetections.get(index, None), self.scanline_clicked)
 				self.scene.addItem(scanline)
-				self.scanline_items.append(scanline)
+				self.scanlines.append(scanline)
 		self.toggle_scanlines(self.scanline_checkbox.isChecked())
 
 	def set_distance_visibility(self, show: bool):
@@ -196,7 +191,7 @@ class MainImageView(QWidget):
 			self.bottom_layout.removeItem(stretch)
 	def toggle_scanlines(self, show: bool):
 		"""Show or hide scanline overlays."""
-		for item in self.scanline_items:
+		for item in self.scanlines:
 			item.setVisible(show)
 		self.set_distance_visibility(show)
 
@@ -208,8 +203,7 @@ class MainImageView(QWidget):
 		endpoints = self.images.scanlineEndpoints[scanline.index].reshape((2, 2))
 		endpointsReadable = list(map(lambda p: tuple(map(int, p)), endpoints))
 		len = int(np.sum((endpoints[0] - endpoints[1]) ** 2) ** 0.5)
-		detections = detectLine(*scanline.index, deepcopy(self.images), reads)
-		if detections:
+		if detections := scanline.detections:
 			split = lambda s: ' '.join((s[0], s[1:7], s[7:]))
 			detections = ', '.join([split(''.join(map(str, d))) for d in detections])
 		text = f"""
@@ -472,7 +466,6 @@ class BarcodeReaderUI(QMainWindow):
 		if not file_path: return
 		logging.info(f"Loading image from file: {os.path.basename(file_path)}")
 		pixmap = QPixmap(file_path)
-		self.main_image_view.set_image(pixmap)
 		self.image_loaded.emit(file_path, pixmap)
 
 	def toggle_camera_capture(self):

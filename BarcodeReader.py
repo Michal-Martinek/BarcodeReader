@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 import os, sys
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 if getattr(sys, 'frozen', False):
@@ -62,6 +62,7 @@ class Images:
 	scanlineEndpoints: np.ndarray[np.int64] = None
 	lines: list[list[tuple[Bars, Spans]]] = None
 	digits: Digits = None
+	lineDetections: dict[tuple[int, int], list[Digits]] = field(default_factory=dict)
 	detectionCounts: npt.NDArray[np.int64] = None
 
 	def initLines(self):
@@ -333,6 +334,7 @@ def detectImage(images: Images) -> Digits:
 		for lineIdx, points in enumerate(parallels):
 			digits = detectLine(gradIdx, lineIdx, images, points)
 			if not digits: continue
+			images.lineDetections[(gradIdx, lineIdx)] = digits
 			logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
 			[detections.append(d) for d in digits if checksumDigit(d)]
 	return chooseDetection(images, detections)
