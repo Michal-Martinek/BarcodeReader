@@ -223,9 +223,10 @@ class MainImageView(QWidget):
 			detections = ', '.join([self._prettyPrintDetection(d) for d in detections])
 		text = f"""
 	Endpoints: {endpointsReadable}, length: {len}
-	Detections: {detections}
-	"""
-		return text
+	Detections: {detections}"""
+		if err := self.images.lineErrs.get(scanline.index, None):
+			text += f'\n\tError: {err}'
+		return text + '\n'
 	def renderHistogram(self, scanline: ClickableScanline) -> ColorImage:
 		uniq, counts = np.unique(self.images.lineReads[scanline.index], return_counts=True)
 		# counts = np.cumulative_sum(counts)

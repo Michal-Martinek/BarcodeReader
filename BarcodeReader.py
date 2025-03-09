@@ -63,6 +63,7 @@ class Images:
 	lines: list[list[tuple[Bars, Spans]]] = None
 	digits: Digits = None
 	lineDetections: dict[tuple[int, int], list[Digits]] = field(default_factory=dict)
+	lineErrs: dict[tuple[int, int], str] = field(default_factory=dict)
 	detectionCounts: npt.NDArray[np.int64] = None
 
 	def initLines(self):
@@ -90,11 +91,12 @@ def genColorsHUE(N):
 def check(cond, msg):
 	if cond: return
 	raise DetectionError(msg)
-def logErr(e: DetectionError, gradIdx: int, lineIdx: int, spanIdx: int=None):
+def logErr(images: Images, e: DetectionError, gradIdx: int, lineIdx: int, spanIdx: int=None):
 	lvl = logging.INFO if spanIdx is not None else logging.DEBUG
 	name = 'span' if spanIdx is not None else 'scanline'
 	spanLoc = f':{spanIdx}' * (spanIdx is not None)
 	logging.log(lvl, f'{name} {gradIdx}:{lineIdx:<2}{spanLoc} ERROR: {e}')
+	images.lineErrs[(gradIdx, lineIdx)] = str(e)
 
 # preprocessing ----------------------------------------------
 def paddToShape(img: np.ndarray, shape) -> np.ndarray:
@@ -228,7 +230,7 @@ def findSpanEnds(bars: Bars, spans: Spans) -> Spans:
 def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
 	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens[..., np.newaxis], maxDiff=NUM_BASEWIDTHS)
-	check(good.any(), 'incorrect code len')
+	check(good.any(), 'unexpected span length (number of basewidths)')
 	spans = spans[good]
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans
@@ -305,7 +307,7 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits
 	try:
 		bars, spans = findSpans(gradIdx, lineIdx, lineReads)
 	except DetectionError as e:
-		return logErr(e, gradIdx, lineIdx)
+		return logErr(images, e, gradIdx, lineIdx)
 	images.addLine(gradIdx, bars, spans)
 	detections = []
 	for spanIdx, span in enumerate(spans):
@@ -314,7 +316,7 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits
 			detected = decodeDigits(span, digitGroups)
 			detections.append(detected)
 		except DetectionError as e:
-			logErr(e, gradIdx, lineIdx, spanIdx)
+			logErr(images, e, gradIdx, lineIdx, spanIdx)
 	return detections
 
 def checksumDigit(digits: Digits) -> bool:
