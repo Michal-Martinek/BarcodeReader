@@ -103,7 +103,7 @@ class MainImageView(QWidget):
 		self.save_button = QPushButton("Save Image")
 		self.zoom_reset_button = QPushButton("Reset Zoom")
 		self.scanline_checkbox = QCheckBox("Show Scanlines")
-		self.scanline_checkbox.toggle()
+		# self.scanline_checkbox.toggle()
 
 		controls_layout = QHBoxLayout()
 		controls_layout.addWidget(self.save_button)
@@ -139,10 +139,10 @@ class MainImageView(QWidget):
 		layout.addWidget(self.view)
 		layout.addLayout(self.bottom_layout)
 
-		self.pixmap_item = None  # Holds the main image
 		self.scanlines: list[ClickableScanline] = []
 		self.scanline_clicked.connect(self.handle_scanline_clicked)
 		self.currDialog: tuple[ClickableScanline, QDialog] = None
+		self.original_img = None
 		self.current_image = None  # Currently displayed QPixmap
 		self.zoom_factor = 1.0
 		self.view.wheelEvent = self.handle_wheel_zoom
@@ -153,18 +153,11 @@ class MainImageView(QWidget):
 
 		self.images: Images = None
 
-	def show_placeholder(self):
-		"""Show a default project description when no image is loaded."""
-		self.scene.clear()
-		placeholder = self.scene.addText("BarcodeReader")
-		placeholder.setDefaultTextColor(Qt.GlobalColor.gray)
-		self.scene.setSceneRect(placeholder.boundingRect())
-
 	def set_image(self, pixmap: QPixmap):
 		"""Display the provided image in the main view."""
 		self.scene.clear()
 		self.current_image = pixmap
-		self.pixmap_item = self.scene.addPixmap(pixmap)
+		self.scene.addPixmap(pixmap)
 		self.scene.setSceneRect(*pixmap.rect().getCoords())
 		# self.reset_zoom()
 		self.render_scanlines()
@@ -173,7 +166,7 @@ class MainImageView(QWidget):
 		value = self.distance_slider.value()
 		BarcodeReader.SCANLINE_DIST = int(value)
 		self.distance_value_label.setText(str(value))
-		self.image_loaded_signal.emit('scanline-dist-resize', self.current_image)
+		self.image_loaded_signal.emit('scanline-dist-resize', self.original_img)
 
 	def render_scanlines(self):
 		self.scanlines.clear()
@@ -276,22 +269,37 @@ class MainImageView(QWidget):
 		if scanline == self.currDialog[0]:
 			self.currDialog = None
 
+	def minZoomFactor(self):
+		return 0.9 * min(self.view.viewport().width() / self.current_image.width(),
+			self.view.viewport().height() / self.current_image.height())
+	def zoom(self, factor):
+		self.view.scale(factor, factor)
 	def handle_wheel_zoom(self, event):
-		factor = 1.2 if event.angleDelta().y() > 0 else 0.8
-		if (newFactor := self.zoom_factor * factor) >= 1.0:
+		factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+		if (newFactor := self.zoom_factor * factor) >= self.minZoomFactor():
 			self.zoom_factor = newFactor
-			self.view.scale(factor, factor)
-
+			self.zoom(factor)
+		else:
+			self.reset_zoom()
 	def reset_zoom(self):
 		self.view.resetTransform()
-		self.zoom_factor = 1.0
+		self.zoom_factor = self.minZoomFactor()
+		self.zoom(self.zoom_factor)
 
+	def scene_to_pixmap(self):
+		rect = self.scene.sceneRect()
+		pixmap = QPixmap(int(rect.width()), int(rect.height()))
+		pixmap.fill(Qt.GlobalColor.transparent)
+		painter = QPainter(pixmap)
+		self.scene.render(painter)
+		painter.end()
+		return pixmap
 	def save_current_image(self):
 		"""Save the current image to disk."""
 		if self.current_image:
 			file_path, _ = QFileDialog.getSaveFileName(self, "Save Image", "", "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg)")
 			if file_path:
-				self.current_image.save(file_path)
+				self.scene_to_pixmap().save(file_path)
 		else:
 			logging.warning("No image to save")
 
@@ -346,6 +354,7 @@ class CameraInput:
 		assert not self.started()
 		self.videoCapture = cv2.VideoCapture(0)
 		self.timer.start(interval_ms)
+		self.captureCamera()
 	def end(self):
 		if not self.started(): return
 		self.timer.stop()
@@ -399,7 +408,7 @@ class DetectionLabel(QLabel):
 				QApplication.clipboard().setText(self.code)
 			self.setColor('red' if self.code == 'None' else 'lightgreen')
 		super().mousePressEvent(event)
-		
+
 # -------------------------
 # Main UI Window
 # -------------------------
@@ -452,7 +461,6 @@ class BarcodeReaderUI(QMainWindow):
 		main_layout.addLayout(content_layout)
 
 		self.main_image_view = MainImageView(self.image_loaded)
-		self.main_image_view.show_placeholder()  # Shows a project description when no image is loaded.
 		content_layout.addWidget(self.main_image_view, stretch=3)
 
 		self.debug_ribbon = DebugRibbon()

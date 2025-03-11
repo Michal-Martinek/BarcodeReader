@@ -25,14 +25,11 @@ class BarcodeProcessor:
 	def process_image(self, image_path: str, pixmap: QPixmap):
 		"""
 		Process the image loaded from file or camera.
-		This dummy implementation simply creates fake barcode text,
-		dummy debug images, and fake scanlines.
 		"""
+		self.ui.main_image_view.original_img = pixmap
 		detected = self.detect_barcode(pixmap, image_path)
 		debug_images = self.generate_debug_images()
 
-		if image_path not in ['Camera input', 'scanline-dist-resize']:
-			self.ui.main_image_view.reset_zoom()
 		# Update the UI:
 		# 1. Set the main image in the center.
 		self.ui.main_image_view.set_image(debug_images[self.ui.debugImgName])
@@ -40,8 +37,8 @@ class BarcodeProcessor:
 		self.ui.add_debug_images(debug_images)
 		# Update the detection result label.
 		self.ui.detection_label.setDetected(detected)
-		# 4. Emit the detected barcode (if you wish to hook it elsewhere)
-		# self.ui.barcode_detected.emit(barcode_text)
+		if image_path not in ['Camera input', 'scanline-dist-resize']:
+			self.ui.main_image_view.reset_zoom()
 		logging.debug(f"Barcode Detected: {detected}")
 
 	def detect_barcode(self, pixmap: QPixmap, image_path) -> Digits:
