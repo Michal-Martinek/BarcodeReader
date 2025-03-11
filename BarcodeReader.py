@@ -1,11 +1,10 @@
 import numpy as np
 import numpy.typing as npt
 import cv2
-import matplotlib.pyplot as plt
 
 import os, sys
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 if getattr(sys, 'frozen', False):
@@ -17,7 +16,8 @@ else:
 NUM_AVERAGING_CHUNKS = (6, 6)
 
 SCANLINE_DIST = 40
-NUM_GRADIENTS = 2 + 3 # TODO count, rename
+NUM_SKEW_GRADIENTS = 3
+NUM_GRADIENTS = 2 * (NUM_SKEW_GRADIENTS + 1)
 MIN_QUIETZONE_WIDTH = 5
 NUM_BASEWIDTHS = 95 - 3
 NUM_EDGES = 4 * 12 + 5 + 3
@@ -61,6 +61,8 @@ class Images:
 	scanlineEndpoints: np.ndarray[np.int64] = None
 	lines: list[list[tuple[Bars, Spans]]] = None
 	digits: Digits = None
+	lineDetections: dict[tuple[int, int], list[Digits]] = field(default_factory=dict)
+	lineErrs: dict[tuple[int, int], str] = field(default_factory=dict)
 	detectionCounts: npt.NDArray[np.int64] = None
 
 	def initLines(self):
@@ -88,11 +90,12 @@ def genColorsHUE(N):
 def check(cond, msg):
 	if cond: return
 	raise DetectionError(msg)
-def logErr(e: DetectionError, gradIdx: int, lineIdx: int, spanIdx: int=None):
+def logErr(images: Images, e: DetectionError, gradIdx: int, lineIdx: int, spanIdx: int=None):
 	lvl = logging.INFO if spanIdx is not None else logging.DEBUG
 	name = 'span' if spanIdx is not None else 'scanline'
 	spanLoc = f':{spanIdx}' * (spanIdx is not None)
 	logging.log(lvl, f'{name} {gradIdx}:{lineIdx:<2}{spanLoc} ERROR: {e}')
+	images.lineErrs[(gradIdx, lineIdx)] = str(e)
 
 # preprocessing ----------------------------------------------
 def paddToShape(img: np.ndarray, shape) -> np.ndarray:
@@ -145,7 +148,8 @@ def genDrawLines(starts, ends, images: Images) -> tuple[list[list[Point]], int]:
 	return linePs, maxLen
 
 def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
-	angles = np.linspace(0, np.pi / 2, NUM_GRADIENTS)
+	# NOTE first generate both orthogonal + all downward skewed gradients: -, \, |
+	angles = np.linspace(0, np.pi / 2, NUM_SKEW_GRADIENTS + 2)
 	gradVecs = np.column_stack((np.sin(angles), np.cos(angles)))
 	# first ^ over y axis, then > on x axis
 	startPsY = np.arange(SCANLINE_DIST, shape[0], SCANLINE_DIST)[::-1]
@@ -153,7 +157,6 @@ def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
 	startPoints = np.zeros((len(startPsY) + len(startPsX), 2), dtype='int')
 	startPoints[:len(startPsY), 0] = startPsY
 	startPoints[len(startPsY):, 1] = startPsX
-	# TODO from bottom
 
 	epsilon = 1e-10
 	edgeDist = (shape,) - startPoints
@@ -162,6 +165,10 @@ def getScanlineEndpoints(shape: tuple, images: Images) -> tuple:
 	startPoints = np.tile(startPoints, (len(gradVecs), 1, 1))
 	endPoints = startPoints + scales[..., np.newaxis] * gradVecs[:, np.newaxis]
 	endPoints = endPoints.astype('int')
+
+	# NOTE flip the skewed gradients vertically to get grads heading upwards
+	startPoints = np.concatenate((startPoints, (shape[0]-1, 0) + (-1, 1) * startPoints[1:-1]))
+	endPoints   = np.concatenate((endPoints,   (shape[0]-1, 0) + (-1, 1) * endPoints[1:-1]))
 	images.scanlineEndpoints = np.concatenate((startPoints, endPoints), axis=-1)
 	return startPoints, endPoints
 def getScanLines(images: Images) -> LineReads:
@@ -222,7 +229,7 @@ def findSpanEnds(bars: Bars, spans: Spans) -> Spans:
 def checkCodeLen(bars: Bars, spans: Spans) -> Spans:
 	lens = bars[spans['end']]['start'] - bars[spans['start']]['start']
 	good = differsByAtmost(spans['moduleWidth'] * NUM_BASEWIDTHS, lens[..., np.newaxis], maxDiff=NUM_BASEWIDTHS)
-	check(good.any(), 'incorrect code len')
+	check(good.any(), 'unexpected span length (number of basewidths)')
 	spans = spans[good]
 	spans['moduleWidth'] = lens[good] / NUM_BASEWIDTHS
 	return spans
@@ -299,7 +306,7 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits
 	try:
 		bars, spans = findSpans(gradIdx, lineIdx, lineReads)
 	except DetectionError as e:
-		return logErr(e, gradIdx, lineIdx)
+		return logErr(images, e, gradIdx, lineIdx)
 	images.addLine(gradIdx, bars, spans)
 	detections = []
 	for spanIdx, span in enumerate(spans):
@@ -308,7 +315,7 @@ def detectLine(gradIdx, lineIdx, images: Images, lineReads: Line) -> list[Digits
 			detected = decodeDigits(span, digitGroups)
 			detections.append(detected)
 		except DetectionError as e:
-			logErr(e, gradIdx, lineIdx, spanIdx)
+			logErr(images, e, gradIdx, lineIdx, spanIdx)
 	return detections
 
 def checksumDigit(digits: Digits) -> bool:
@@ -328,6 +335,7 @@ def detectImage(images: Images) -> Digits:
 		for lineIdx, points in enumerate(parallels):
 			digits = detectLine(gradIdx, lineIdx, images, points)
 			if not digits: continue
+			images.lineDetections[(gradIdx, lineIdx)] = digits
 			logging.info(f'scanline {gradIdx}:{lineIdx:<2} {digits}')
 			[detections.append(d) for d in digits if checksumDigit(d)]
 	return chooseDetection(images, detections)
@@ -347,7 +355,8 @@ def colorcodeQuietzone(lineSlice, basewidth, quietzoneEdge, color=(0, 0, 255)):
 	fourths = 2 * (color[2] != 0) + 1
 	off = quietzoneEdge['start'] + (quietzoneEdge['len'] / 4 * fourths).astype('int')
 	lineSlice[off : off + basewidth] = color
-def drawSpans(img: ColorImage, images: Images):
+def drawSpans(images: Images) -> ColorImage:
+	img = toImg(images.lineReads > 0.)
 	for grad in images.lines:
 		for bars, spans in grad:
 			for span in spans:
@@ -356,6 +365,7 @@ def drawSpans(img: ColorImage, images: Images):
 				colorcodeQuietzone(lineSlice, span['moduleWidth'].astype('int'), startEdge)
 				endEdge = bars[span['end']]
 				colorcodeQuietzone(lineSlice, span['moduleWidth'].astype('int'), endEdge, (0, 255, 0))
+	return img
 def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, grads:int=1):
 	if lightness: cv2.imshow('lightness', toImg(images.lightness))
 	if localAverages: cv2.imshow('localAverages', toImg(images.localAverages))
@@ -363,8 +373,7 @@ def drawDebugs(images: Images, lightness=False, localAverages=False, BaW=True, g
 	cv2.imshow('linesImg', images.linesImg)
 
 	if grads:
-		lineReadImgs = toImg(images.lineReads > 0.)
-		drawSpans(lineReadImgs, images)
+		lineReadImgs = drawSpans(images)
 		drawGradLineReads(lineReadImgs, grads == 1)
 
 # IO --------------------------------------------------

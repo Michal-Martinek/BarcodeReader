@@ -2,6 +2,8 @@ import logging
 import os
 import random
 import sys
+from copy import deepcopy
+
 import cv2
 import numpy as np
 from PyQt6 import QtCore
@@ -10,10 +12,11 @@ from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QIcon, QColor
 from PyQt6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
 	QLabel, QFileDialog, QGraphicsView, QGraphicsScene, QScrollArea, QCheckBox,
-	QDialog, QDialogButtonBox, QGraphicsLineItem, QSizePolicy
+	QDialog, QDialogButtonBox, QGraphicsLineItem, QSlider
 )
 
-from BarcodeReader import NUM_GRADIENTS, genColorsHUE
+import BarcodeReader
+from BarcodeReader import NUM_GRADIENTS, NUM_SKEW_GRADIENTS, ColorImage, Digits, Images, checksumDigit, drawSpans, genColorsHUE
 
 def toImg(arr: np.ndarray):
 	'''converts arbitrary ndarray to image like - 3 color channels, dtype - uint8'''
@@ -38,35 +41,57 @@ def pixmap2Numpy(pixmap: QPixmap) -> np.ndarray:
 # Clickable Scanline
 # -------------------------
 class ClickableScanline(QGraphicsLineItem, QObject):
-	clicked = pyqtSignal(object)  # Emits self when clicked
-
-	def __init__(self, line: QLineF, color: QColor, *, parent=None):
+	def __init__(self, line: QLineF, index: tuple, color: QColor, detections: list[Digits], clickedSignal: pyqtSignal, *, parent=None):
 		QObject.__init__(self)
 		QGraphicsLineItem.__init__(self, line, parent)
 		self.setAcceptHoverEvents(True)
 		self.default_pen = QPen(color, 1)
-		self.highlight_pen = QPen(Qt.GlobalColor.green, 2)
+		self.highlight_pen = QPen(color, 2)
+		self.hover_pen = QPen(QColor(255, 0, 0), 3)
 		self.setPen(self.default_pen)
+		self.index = index
+		self.detections = detections
+		self.opacityRatio = 1.
+		self.clickedSignal = clickedSignal
+	def hasDetections(self) -> bool:
+		return bool(self.detections and len(self.detections))
+	def show(self, visible, dimmBlank):
+		self.setVisible(visible)
+		self.opacityRatio = 1. if not dimmBlank or self.detections else 0.2
+		self.setOpacity(self.opacityRatio)
 
 	def mousePressEvent(self, event):
-		# self.setPen(self.highlight_pen)
-		# self.clicked.emit(self)
+		self.setPen(self.highlight_pen)
+		self.setOpacity(1.)
+		self.clickedSignal.emit(self)
 		super().mousePressEvent(event)
+	def detailExit(self):
+		self.setPen(self.default_pen)
+		self.setOpacity(self.opacityRatio)
 
 	def hoverEnterEvent(self, event):
 		self.setCursor(Qt.CursorShape.PointingHandCursor)
+		if self.pen() == self.default_pen:
+			self.setPen(self.hover_pen)
+		self.setOpacity(1.)
 		super().hoverEnterEvent(event)
 
 	def hoverLeaveEvent(self, event):
 		self.unsetCursor()
+		if self.pen() == self.hover_pen:
+			self.setPen(self.default_pen)
+			self.setOpacity(self.opacityRatio)
 		super().hoverLeaveEvent(event)
 
 # -------------------------
 # Main Image Display Widget
 # -------------------------
 class MainImageView(QWidget):
-	def __init__(self):
+	scanline_clicked = pyqtSignal(ClickableScanline)
+
+	def __init__(self, image_loaded_signal: pyqtSignal):
 		super().__init__()
+
 		# QGraphicsScene & QGraphicsView allow overlaying scanlines on an image.
 		self.scene = QGraphicsScene(self)
 		self.view = QGraphicsView(self.scene, self)
@@ -74,24 +99,50 @@ class MainImageView(QWidget):
 		self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 		self.view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
-		# Control buttons
+		# Main control buttons layout
 		self.save_button = QPushButton("Save Image")
 		self.zoom_reset_button = QPushButton("Reset Zoom")
 		self.scanline_checkbox = QCheckBox("Show Scanlines")
+		# self.scanline_checkbox.toggle()
 
 		controls_layout = QHBoxLayout()
 		controls_layout.addWidget(self.save_button)
 		controls_layout.addWidget(self.zoom_reset_button)
 		controls_layout.addWidget(self.scanline_checkbox)
-		controls_layout.addStretch()
+
+		# Scanline distance controls
+		self.distance_label = QLabel("Scanline distance:")
+		self.distance_value_label = QLabel(str(BarcodeReader.SCANLINE_DIST))
+		self.distance_slider = QSlider(Qt.Orientation.Horizontal)
+		self.distance_slider.setMinimum(5)
+		self.distance_slider.setMaximum(100)
+		self.distance_slider.setValue(BarcodeReader.SCANLINE_DIST)
+		self.distance_slider.setTickInterval(5)
+		self.distance_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+		self.distance_slider.valueChanged.connect(self.scanline_dist_changed)
+		self.image_loaded_signal = image_loaded_signal
+
+		# Layout for distance constrols
+		self.distance_layout = QHBoxLayout()
+		self.distance_layout.addWidget(self.distance_label)
+		self.distance_layout.addWidget(self.distance_value_label)
+		self.distance_layout.addWidget(self.distance_slider)
+
+		# Combine all layouts
+		self.bottom_layout = QHBoxLayout()
+		self.bottom_layout.addLayout(controls_layout)
+		self.bottom_layout.addLayout(self.distance_layout)
+
+		self.set_distance_visibility(self.scanline_checkbox.isChecked())
 
 		layout = QVBoxLayout(self)
 		layout.addWidget(self.view)
-		layout.addLayout(controls_layout)
+		layout.addLayout(self.bottom_layout)
 
-		self.pixmap_item = None  # Holds the main image
-		self.scanline_items = []  # List of overlay scanline items
-		self.scanline_items_data = []  # Stores scanline coordinates
+		self.scanlines: list[ClickableScanline] = []
+		self.scanline_clicked.connect(self.handle_scanline_clicked)
+		self.currDialog: tuple[ClickableScanline, QDialog] = None
+		self.original_img = None
 		self.current_image = None  # Currently displayed QPixmap
 		self.zoom_factor = 1.0
 		self.view.wheelEvent = self.handle_wheel_zoom
@@ -100,73 +151,155 @@ class MainImageView(QWidget):
 		self.save_button.clicked.connect(self.save_current_image)
 		self.scanline_checkbox.toggled.connect(self.toggle_scanlines)
 
-	def show_placeholder(self):
-		"""Show a default project description when no image is loaded."""
-		self.scene.clear()
-		placeholder = self.scene.addText("BarcodeReader")
-		placeholder.setDefaultTextColor(Qt.GlobalColor.gray)
-		self.scene.setSceneRect(placeholder.boundingRect())
+		self.images: Images = None
 
 	def set_image(self, pixmap: QPixmap):
 		"""Display the provided image in the main view."""
 		self.scene.clear()
 		self.current_image = pixmap
-		self.pixmap_item = self.scene.addPixmap(pixmap)
+		self.scene.addPixmap(pixmap)
 		self.scene.setSceneRect(*pixmap.rect().getCoords())
 		# self.reset_zoom()
-		self.add_scanlines(self.scanline_items_data)
+		self.render_scanlines()
 
-	def add_scanlines(self, lines_data):
-		"""
-		Overlay scanlines on the image.
-		lines_data: list of tuples (x1, y1, x2, y2)
-		"""
-		self.scanline_items_data = lines_data
-		self.scanline_items.clear()
+	def scanline_dist_changed(self):
+		value = self.distance_slider.value()
+		BarcodeReader.SCANLINE_DIST = int(value)
+		self.distance_value_label.setText(str(value))
+		self.image_loaded_signal.emit('scanline-dist-resize', self.original_img)
+
+	def render_scanlines(self):
+		self.scanlines.clear()
 		assert self.current_image
-		for grad, color in zip(lines_data, genColorsHUE(NUM_GRADIENTS)):
-			for coords in grad:
+		endpoints = self.images.scanlineEndpoints[..., (1, 0, 3, 2)] # y, x -> x, y
+		for gradIdx, (grad, color) in enumerate(zip(endpoints, genColorsHUE(NUM_GRADIENTS))):
+			for lineIdx, coords in enumerate(grad):
+				if gradIdx in [0, NUM_SKEW_GRADIENTS + 1] and np.any(coords[2:] == 0):
+					continue # ignore vertical / horizontal lines stacked at the edge of img
 				line = QLineF(*coords)
-				scanline = ClickableScanline(line, QColor(*color))
-				# scanline.clicked.connect(self.handle_scanline_clicked)
+				index = (gradIdx, lineIdx)
+				scanline = ClickableScanline(line, index, QColor(*color), self.images.lineDetections.get(index, None), self.scanline_clicked)
 				self.scene.addItem(scanline)
-				self.scanline_items.append(scanline)
+				self.scanlines.append(scanline)
 		self.toggle_scanlines(self.scanline_checkbox.isChecked())
 
-
+	def set_distance_visibility(self, show: bool):
+		self.distance_label.setVisible(show)
+		self.distance_value_label.setVisible(show)
+		self.distance_slider.setVisible(show)
+		if not show:
+			return self.bottom_layout.addStretch()
+		while True: # remove all stretches at the end
+			stretch = self.bottom_layout.takeAt(self.distance_layout.count() - 1)
+			if not stretch or not stretch.spacerItem(): break
+			self.bottom_layout.removeItem(stretch)
 	def toggle_scanlines(self, show: bool):
 		"""Show or hide scanline overlays."""
-		for item in self.scanline_items:
-			item.setVisible(show)
+		for line in self.scanlines:
+			line.show(show, True)
+		self.set_distance_visibility(show)
 
-	def handle_scanline_clicked(self, scanline):
-		"""Handle a scanline click by opening a details popup."""
+	def closeDialog(self):
+		if self.currDialog:
+			# return scanline.detailExit()
+			self.currDialog[1].close()
+	def _prettyPrintDetection(self, d: Digits) -> str:
+		s = ''.join(map(str, d))
+		spaced = ' '.join((s[0], s[1:7], s[7:]))
+		spaced += ' ✔️' if checksumDigit(d) else ' ❌'
+		return spaced
+	def getScanlineDesc(self, scanline: ClickableScanline) -> str:
+		endpoints = self.images.scanlineEndpoints[scanline.index].reshape((2, 2))
+		endpointsReadable = list(map(lambda p: tuple(map(int, p)), endpoints))
+		len = int(np.sum((endpoints[0] - endpoints[1]) ** 2) ** 0.5)
+		if detections := scanline.detections:
+			detections = ', '.join([self._prettyPrintDetection(d) for d in detections])
+		text = f"""
+	Endpoints: {endpointsReadable}, length: {len}
+	Detections: {detections}"""
+		if err := self.images.lineErrs.get(scanline.index, None):
+			text += f'\n\tError: {err}'
+		return text + '\n'
+	def renderHistogram(self, scanline: ClickableScanline) -> ColorImage:
+		uniq, counts = np.unique(self.images.lineReads[scanline.index], return_counts=True)
+		# counts = np.cumulative_sum(counts)
+		lightnessScale = np.arange(256, dtype='uint8')[:, np.newaxis, np.newaxis]
+		img = np.tile(lightnessScale, (1, counts.max() + 20, 3))
+		for lightness, count in zip((uniq * 256).astype('uint8'), counts):
+			img[lightness, :count] = (0, 255, 0)
+		return img
+	def renderScanlineDetails(self, scanline: ClickableScanline) -> QDialog:
 		dialog = QDialog(self)
-		dialog.setWindowTitle("Scanline Details")
+		dialog.setWindowTitle(f"Scanline details: grad={scanline.index[0]}, index={scanline.index[1]}")
 		layout = QVBoxLayout(dialog)
-		info_label = QLabel("Detailed scanline info goes here.\nTODO: Implement actual details.")
+		text = self.getScanlineDesc(scanline)
+		info_label = QLabel(text)
 		layout.addWidget(info_label)
-		buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-		buttons.accepted.connect(dialog.accept)
-		layout.addWidget(buttons)
-		dialog.exec()
 
+		assert self.images
+		image_label = QLabel()
+		lineRead = drawSpans(self.images)[scanline.index]
+		readsImg = np.repeat(lineRead[np.newaxis], 100, axis=0)
+		image_label.setPixmap(numpy2Pixmap(readsImg))
+		layout.addWidget(image_label)
+
+		label = QLabel('\n\tLightness histogram\n')
+		layout.addWidget(label)
+		histogram = self.renderHistogram(scanline)
+		image_label = QLabel()
+		image_label.setPixmap(numpy2Pixmap(histogram))
+		layout.addWidget(image_label)
+
+		# buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+		# buttons.accepted.connect(dialog.accept)
+		# layout.addWidget(buttons)
+		return dialog
+	def handle_scanline_clicked(self, scanline: ClickableScanline):
+		"""Handle a scanline click by opening a details popup."""
+		self.closeDialog()
+		dialog = self.renderScanlineDetails(scanline)
+		dialog.setModal(False)
+		dialog.show()
+		dialog.finished.connect(lambda: self.scanline_dialog_exit(scanline))
+		self.currDialog = scanline, dialog
+	def scanline_dialog_exit(self, scanline: ClickableScanline):
+		try:
+			scanline.detailExit()
+		except RuntimeError: pass # scanline is deleted after changing debug img
+		if scanline == self.currDialog[0]:
+			self.currDialog = None
+
+	def minZoomFactor(self):
+		return 0.9 * min(self.view.viewport().width() / self.current_image.width(),
+			self.view.viewport().height() / self.current_image.height())
+	def zoom(self, factor):
+		self.view.scale(factor, factor)
 	def handle_wheel_zoom(self, event):
-		factor = 1.2 if event.angleDelta().y() > 0 else 0.8
-		if (newFactor := self.zoom_factor * factor) >= 1.0:
+		factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+		if (newFactor := self.zoom_factor * factor) >= self.minZoomFactor():
 			self.zoom_factor = newFactor
-			self.view.scale(factor, factor)
-
+			self.zoom(factor)
+		else:
+			self.reset_zoom()
 	def reset_zoom(self):
 		self.view.resetTransform()
-		self.zoom_factor = 1.0
+		self.zoom_factor = self.minZoomFactor()
+		self.zoom(self.zoom_factor)
 
+	def scene_to_pixmap(self):
+		rect = self.scene.sceneRect()
+		pixmap = QPixmap(int(rect.width()), int(rect.height()))
+		pixmap.fill(Qt.GlobalColor.transparent)
+		painter = QPainter(pixmap)
+		self.scene.render(painter)
+		painter.end()
+		return pixmap
 	def save_current_image(self):
 		"""Save the current image to disk."""
 		if self.current_image:
 			file_path, _ = QFileDialog.getSaveFileName(self, "Save Image", "", "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg)")
 			if file_path:
-				self.current_image.save(file_path)
+				self.scene_to_pixmap().save(file_path)
 		else:
 			logging.warning("No image to save")
 
@@ -221,6 +354,7 @@ class CameraInput:
 		assert not self.started()
 		self.videoCapture = cv2.VideoCapture(0)
 		self.timer.start(interval_ms)
+		self.captureCamera()
 	def end(self):
 		if not self.started(): return
 		self.timer.stop()
@@ -233,6 +367,47 @@ class CameraInput:
 		if not ret:
 			return logging.error('camera input unavailable')
 		self.signal.emit('Camera input', numpy2Pixmap(img))
+
+
+class DetectionLabel(QLabel):
+	textTemplate = 'Detected: {}'
+	def __init__(self, parent=None):
+		super().__init__('', parent)
+		self.default_color = 'white'
+		self.hover_color = 'dodgerblue'
+		self.setColor(self.default_color)
+		self.setCursor(Qt.CursorShape.PointingHandCursor)
+		self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		self.setDetected(None)
+	def setColor(self, color: str):
+		style = f"border: none; font-size: 20px; color: {color};"
+		self.setStyleSheet(style)
+
+	def stringifyText(self, detected: np.ndarray) -> str:
+		if isinstance(detected, np.ndarray) and detected.size:
+			return ''.join(map(str, detected))
+		return str(None)
+	def setDetected(self, detected: np.ndarray):
+		self.code = s = self.stringifyText(detected)
+		if len(s) == 13:
+			s = ' '.join((s[0], s[1:7], s[7:]))
+		self.setText(self.textTemplate.format(s))
+
+	def enterEvent(self, event):
+		"""Change text color when hovered"""
+		self.setColor(self.hover_color)
+		super().enterEvent(event)
+	def leaveEvent(self, event):
+		"""Revert text color when not hovered"""
+		self.setColor(self.default_color)
+		super().leaveEvent(event)
+	def mousePressEvent(self, event):
+		"""Copy text to clipboard when clicked"""
+		if event.button() == Qt.MouseButton.LeftButton:
+			if self.code != 'None':
+				QApplication.clipboard().setText(self.code)
+			self.setColor('red' if self.code == 'None' else 'lightgreen')
+		super().mousePressEvent(event)
 
 # -------------------------
 # Main UI Window
@@ -274,21 +449,18 @@ class BarcodeReaderUI(QMainWindow):
 		self.btn_load_camera.clicked.connect(self.toggle_camera_capture)
 		input_layout.addWidget(self.btn_load_camera)
 
-		input_layout.addStretch()
-		main_layout.addLayout(input_layout)
+		self.detection_label = DetectionLabel()
+		input_layout.addStretch(1)
+		input_layout.addWidget(self.detection_label)
+		input_layout.addStretch(2)
 
-		# Detection result label.
-		self.detection_label = QLabel("Detection Result: None")
-		# self.detection_label.setMinimumSize(self.detection_label.width(), self.detection_label.height())
-		self.detection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-		main_layout.addWidget(self.detection_label)
+		main_layout.addLayout(input_layout)
 
 		# Main content: central image view and right-side debug ribbon.
 		content_layout = QHBoxLayout()
 		main_layout.addLayout(content_layout)
 
-		self.main_image_view = MainImageView()
-		self.main_image_view.show_placeholder()  # Shows a project description when no image is loaded.
+		self.main_image_view = MainImageView(self.image_loaded)
 		content_layout.addWidget(self.main_image_view, stretch=3)
 
 		self.debug_ribbon = DebugRibbon()
@@ -313,17 +485,18 @@ class BarcodeReaderUI(QMainWindow):
 	def load_image_from_file(self, file=None):
 		"""Open a file dialog and load an image from disk."""
 		self.cameraInput.end()
+		self.main_image_view.closeDialog()
 		file_path = file or QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")[0]
 		if not file_path: return
 		logging.info(f"Loading image from file: {os.path.basename(file_path)}")
 		pixmap = QPixmap(file_path)
-		self.main_image_view.set_image(pixmap)
 		self.image_loaded.emit(file_path, pixmap)
 
 	def toggle_camera_capture(self):
 		if self.cameraInput.started():
 			self.cameraInput.end()
 		else:
+			self.main_image_view.closeDialog()
 			self.cameraInput.start()
 			self.main_image_view.reset_zoom()
 
@@ -343,13 +516,3 @@ class BarcodeReaderUI(QMainWindow):
 		for name, pixmap in debug_images.items():
 			self.debug_ribbon.add_debug_image(name, pixmap)
 		# self.debug_images_generated.emit(debug_images)
-
-	def display_detection_result(self, detected: np.ndarray):
-		"""Update the detection result label."""
-		text = "Detection Result: None"
-		if detected.size:
-			assert detected.shape == (13,)
-			s = ''.join(map(str, detected))
-			s = ' '.join((s[0], s[1:7], s[7:]))
-			text = f"Detection Result: {s}"
-		self.detection_label.setText(text)
