@@ -1,7 +1,6 @@
 import logging
 import sys, os
 import numpy as np
-import cv2
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap, QIcon

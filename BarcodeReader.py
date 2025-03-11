@@ -1,7 +1,6 @@
 import numpy as np
 import numpy.typing as npt
 import cv2
-import matplotlib.pyplot as plt
 
 import os, sys
 import logging
