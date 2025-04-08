@@ -1,7 +1,7 @@
 I'm doing this project as my graduation project for informatics.  
 You can read the propositions [here](https://github.com/Michal-Martinek/BarcodeReader/blob/main/BarcodeReader-propositions.md) (in Czech)
 
-## Roadplan
+## Features
 - [x] successfully recognizes **85 %** of test images (**10 %** rate of overdetection)
 - [x] UI
   - [x] single window

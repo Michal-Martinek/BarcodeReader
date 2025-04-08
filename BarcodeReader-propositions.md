@@ -43,3 +43,28 @@ Projekt bude vyvíjen v **Pythonu** s využitím knihoven **OpenCV** pro zpracov
 Grafické rozhraní bude využívat knihovnu **PyQt6**.  
 Aplikace bude určena pro operační systém Windows a výsledná implementace bude zabalena do spustitelného souboru exe.  
 
+## Závěr
+Byl realizován funkční prototyp s moderním uživatelským rozhraním, který s jistou spolehlivostí čte čárové kódy standartu EAN-13 a nabízí vhled a povrchní analýzu užitého algoritmu.  
+
+Dle vytyčených cílů byly autorem promyšleny a následně v praxi ověřeny a implementovány algoritmy zpracování obrazu.  
+Tudíž nejde o profesionální přístup k řešení problémů tohoto typu, ale pouze o pokus jak dosáhnout cíle postupným obměnováním užitého postupu, dle získaných praktických zkušeností a zjištěných nedostatků.  
+
+### Hlavní nedostatky programu v tuto chvíli:
+- správné rozlišení bílé a černé (binarizace vstupu)
+	- způsobuje záměnu pixelů, což zamezuje správné funkci dalšího zpracování
+		- např. se nenajde značka START/STOP, dva pruhy se slijí do jednoho, záměna čtených číslic
+	- to je většinou způsobeno nekvalitním vstupním obrázkem (nízké rozlišení / kontrast, rozmazání, šum na úrovni pixelů, špatné osvětlení)
+	- pro minimalizaci tohoto problému bylo podniknuto:
+		- adaptivní thresholding - bereme v úvahu jas okolí pixelu
+		- výpočet šířky pruhů bere u úvahu jas krajních pixelů
+			- _spočítá se kde v prostoru mezi dvěma pixely nejspíše dochází k přechodu bezi barvami -> neceločíselná šířka pruhů_
+
+### Možná další vylepšení
+- zlepšení uživatelského komfortu
+	- zobrazení náhledu a informací o produktu který byl načten čárovým kódem
+
+- zlepšení binarizace vstupu
+	- vyladění parametrů thresholdingu
+	- využít širší okolí čtecí čáry (ne pouze 1-pixel širokou)
+		- to by omezilo vliv náhodého šumu na záměnu barev
+	- předzpracování obrazu pro odstranění šumu
