@@ -46,6 +46,12 @@ Aplikace bude určena pro operační systém Windows a výsledná implementace b
 ## Závěr
 Byl realizován funkční prototyp s moderním uživatelským rozhraním, který s jistou spolehlivostí čte čárové kódy standartu EAN-13 a nabízí vhled a povrchní analýzu užitého algoritmu.  
 
+![Screenshot](images/screenshot.png)
+
+Dialogové okno ukazujííc detaily skenovací čáry
+![Scanline dialog](images/scanline-dialog.png)
+
+
 Dle vytyčených cílů byly autorem promyšleny a následně v praxi ověřeny a implementovány algoritmy zpracování obrazu.  
 Tudíž nejde o profesionální přístup k řešení problémů tohoto typu, ale pouze o pokus jak dosáhnout cíle postupným obměnováním užitého postupu, dle získaných praktických zkušeností a zjištěných nedostatků.  
 
@@ -58,6 +64,8 @@ Tudíž nejde o profesionální přístup k řešení problémů tohoto typu, al
 		- adaptivní thresholding - bereme v úvahu jas okolí pixelu
 		- výpočet šířky pruhů bere u úvahu jas krajních pixelů
 			- _spočítá se kde v prostoru mezi dvěma pixely nejspíše dochází k přechodu bezi barvami -> neceločíselná šířka pruhů_
+			
+			![šířka pruhů](images/fractional-bar-width.png)
 
 ### Možná další vylepšení
 - zlepšení uživatelského komfortu
